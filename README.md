@@ -27,46 +27,46 @@ The model contains two flags that can be passed to the prover using the syntax `
 - The `-Donlysecuritylemmas` flag keeps all lemmas used to prove the security properties of our protocol but removes lemmas that are only used to prove the executability of the protocol and the presence of attacks.
 
 ## Prover Performance
-Below is a table with the number of steps and runtime required to prove all lemmas (12 helper, 6 security, and 14 executability lemmas). For security lemmas, we also include the performance of a run without the debug restrictions (marked with an asterisk). Note that for the executability and attack lemmas, debug restrictions are not problematic, since these lemmas provide us with a concrete protocol trace even with the additional restrictions.
+Below is a table with the number of steps and runtime required to prove all lemmas (12 helper, 6 security, and 14 executability lemmas). For security lemmas, we also include the performance of a run without the debug restrictions (marked with an asterisk). Note that for the executability and attack lemmas, debug restrictions are not problematic, since these lemmas provide us with a concrete protocol trace despite any additional restrictions. The proof output is stored in [all-lemmas-with-debug-restrictions.spthy](./all-lemmas-with-debug-restrictions.spthy) and [sec-lemmas-without-debug-restrictions.spthy](./sec-lemmas-without-debug-restrictions.spthy), respectively.
 
 The performance evaluation was performed on a VM running with 3 CPU cores (13th Gen Intel(R) Core(TM) i7-1365U) and 24000MB of RAM.
 
-| Lemma                        | Steps | Runtime         | Steps* | Runtime*       |
-|:----------------------------:|:-----:|:---------------:|:------:|:--------------:|
-| Helper1                      | 247   | 1256s (20min)   | 247    | 1125s (18min)  |
-| Helper2                      | 35    | 1244s (20min)   | 35     | 998s (16min)   |
-| Helper3                      | 117   | 1161s (19min)   | 117    | 1055s (17min)  |
-| Helper4                      | 82    | 1190s (19min)   | 82     | 1090s (18min)  |
-| Helper5                      | 250   | 1184s (19min)   | 250    | 1097s (18min)  |
-| Helper6                      | 8     | 1176s (19min)   | 8      | 1123s (18min)  |
-| Helper7                      | 135   | 1103s (18min)   | 135    | 990s (16min)   |
-| Helper8                      | 359   | 1243s (20min)   | 359    | 1131s (18min)  |
-| Helper9                      | 83    | 1183s (19min)   | 83     | 1128s (18min)  |
-| Helper10                     | 220   | 1169s (19min)   | 220    | 1054s (17min)  |
-| Helper11                     | 1666  | 2409s (40min)   | 1666   | 2228s (37min)  |
-| Helper12                     | 1895  | 1229s (20min)   | 1895   | 1239s (20min)  |
-| Sec1                         | 390   | 1257s (20min)   | 317    | 1064s (17min)  |
-| Sec2                         | 270   | 1162s (19min)   | 270    | 1086s (18min)  |
-| Sec3                         | 805   | 1324s (22min)   | 805    | 1245s (20min)  |
-| Sec4                         | 2052  | 1836s (30min)   | 2085   | 1701s (28min)  |
-| Sec5                         | 3526  | 8109s (135min)  | 3526   | 7491s (124min) |
-| Sec6                         | 104   | 1348s (22min)   | 104    | 1220s (20min)  |
-| Helper + Sec combined        |       |                 |        | 9506s (158min) |
-| Exec1                        | 62    | 1315s (21min)   |        |                |
-| Exec2                        | 41    | 1458s (24min)   |        |                |
-| Exec3                        | 55    | 1268s (21min)   |        |                |
-| Exec4                        | 53    | 1296s (21min)   |        |                |
-| Exec5                        | 43    | 1250s (20min)   |        |                |
-| Exec6                        | 43    | 1218s (20min)   |        |                |
-| Exec7                        | 57    | 1307s (21min)   |        |                |
-| Exec8                        | 57    | 1269s (21min)   |        |                |
-| Exec9                        | 40    | 1286s (21min)   |        |                |
-| Exec10                       | 54    | 1253s (20min)   |        |                |
-| Exec11                       | 62    | 1247s (20min)   |        |                |
-| Exec12                       | 56    | 1249s (20min)   |        |                |
-| Exec13                       | 55    | 1270s (21min)   |        |                |
-| Exec14                       | 60    | 1347s (22min)   |        |                |
-| Helper + Sec + Exec combined |       | 13370s (222min) |        |                |
+| Lemma                        | Steps | Runtime         | Steps* | Runtime*         |
+|:----------------------------:|:-----:|:---------------:|:------:|:----------------:|
+| Helper1                      | 247   | 1256s (20min)   | 247    | 1125s (18min)    |
+| Helper2                      | 35    | 1244s (20min)   | 35     | 998s (16min)     |
+| Helper3                      | 117   | 1161s (19min)   | 117    | 1055s (17min)    |
+| Helper4                      | 82    | 1190s (19min)   | 82     | 1090s (18min)    |
+| Helper5                      | 250   | 1184s (19min)   | 250    | 1097s (18min)    |
+| Helper6                      | 8     | 1176s (19min)   | 8      | 1123s (18min)    |
+| Helper7                      | 135   | 1103s (18min)   | 135    | 990s (16min)     |
+| Helper8                      | 359   | 1243s (20min)   | 359    | 1131s (18min)    |
+| Helper9                      | 83    | 1183s (19min)   | 83     | 1128s (18min)    |
+| Helper10                     | 220   | 1169s (19min)   | 220    | 1054s (17min)    |
+| Helper11                     | 1666  | 2409s (40min)   | 1666   | 2228s (37min)    |
+| Helper12                     | 1895  | 1229s (20min)   | 1895   | 1239s (20min)    |
+| Sec1                         | 390   | 1257s (20min)   | 317    | 1064s (17min)    |
+| Sec2                         | 270   | 1162s (19min)   | 270    | 1086s (18min)    |
+| Sec3                         | 805   | 1324s (22min)   | 805    | 1245s (20min)    |
+| Sec4                         | 2052  | 1836s (30min)   | 2085   | 1701s (28min)    |
+| Sec5                         | 3526  | 8109s (135min)  | 3526   | 7491s (124min)   |
+| Sec6                         | 104   | 1348s (22min)   | 104    | 1220s (20min)    |
+| Helper + Sec combined        |       |                 | 12204  | 10201s (170 min) |
+| Exec1                        | 62    | 1315s (21min)   |        |                  |
+| Exec2                        | 41    | 1458s (24min)   |        |                  |
+| Exec3                        | 55    | 1268s (21min)   |        |                  |
+| Exec4                        | 53    | 1296s (21min)   |        |                  |
+| Exec5                        | 43    | 1250s (20min)   |        |                  |
+| Exec6                        | 43    | 1218s (20min)   |        |                  |
+| Exec7                        | 57    | 1307s (21min)   |        |                  |
+| Exec8                        | 57    | 1269s (21min)   |        |                  |
+| Exec9                        | 40    | 1286s (21min)   |        |                  |
+| Exec10                       | 54    | 1253s (20min)   |        |                  |
+| Exec11                       | 62    | 1247s (20min)   |        |                  |
+| Exec12                       | 56    | 1249s (20min)   |        |                  |
+| Exec13                       | 55    | 1270s (21min)   |        |                  |
+| Exec14                       | 60    | 1347s (22min)   |        |                  |
+| Helper + Sec + Exec combined | 13373 | 13086s (218min) |        |                  |
 
 Lemma Legend
 
@@ -289,3 +289,21 @@ Note that for simplicity, we use a single bitmap covering both secure and insecu
 #### Signed TLS Transcript
 - value = < 'transcript', domain >
 - transcript = < value, sign(value, tlsPrivateKey) >
+
+### Design Considerations
+
+#### Single Occurrence Events
+In Tamarin, model state is either persistent, i.e., once a fact enters the model state, it is never removed, or non-persistent, i.e., if the fact can be consumed by a rule and removed from the model state.
+We typically used persistent facts in combination with restrictions to ensure that a specific event only occurs once, e.g., having a persistent CA identifier fact and adding a restriction that each CA has a unique identifier.
+The reason for this design choice is that persistent facts can be reused during proof search and thus do not have to be recomputed, e.g., we likely need to derive the valid DNSSEC public key of the root multiple times during an execution.
+However, for facts that are only used once, proof search performance of our model may be improved by replacing a persistent fact and a restriction with a non-persistent fact, since this (1) reduces the complexity of the model by removing one restriction and (2) reduces the size of the model state since these facts are removed after they are used in a rule.
+Concretely, this optimization may be used for the NSEC request, and certificate issue request facts.
+
+#### Dolev-Yao with Revealed Keys
+Our model has two rules ([RevealDomainOwner{DnssecKey,TlsKey}]) that allow the adversary to learn DNSSEC and TLS private keys, which is different from a traditional Dolev-Yao adversary that does not observe secret keys that are not transmitted over the network.
+These rules allow us to verify that the security of our protocol indeed relies on these secret keys, i.e., that we did not mistakenly model a channel as a secure channel, even when it should be insecure due to a compromised key.
+For example, the lemma AdversaryCaaAcceptedForVictimDomainWithKeyReveal shows that if the victim's DNSSEC key is revealed, the adversary can convince a secure CA to issue a fake certificate.
+However, we ensure that, for all security lemmas, the model uses a standard Dolev-Yao adversary.
+All DNSSEC-related security lemmas require the fact SecureChainExtended(domain), which comes with a restriction that ensures that neither the domain nor any of its ancestor domains invoked the [RevealDomainOwnerDnssecKey] rule.
+Similarly, for the security lemmas that rely on the secrecy of the TLS private key, we prove these lemmas for all cases except the cases where the Dolev-Yao adversary knows this key, i.e., the [RevealDomainOwnerTlsKey] rule has been invoked.
+Hence, we effectively have a Dolev-Yao adversary that does not know the TLS private key of any benign domain owner, nor the DNSSEC private key of the victim domain and its ancestor domains.
