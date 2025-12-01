@@ -110,7 +110,7 @@ The model is located in [model.spthy](./model.spthy). Note that "secure" CAA tag
 ## Overview
 
 Below is an overview of the modeled entities and their interactions using Tamarin rules and restrictions.
-Relevant rules are referenced in square brackets [[CreateSecureCa](./model.spthy#L119)], and relevant restrictions are referenced in curly brackets {[RegisterSingleCaPerIdentifier](./model.spthy#L34)}.
+Relevant rules are referenced in square brackets [[CreateSecureCa](./model.spthy#L128)], and relevant restrictions are referenced in curly brackets {[RegisterSingleCaPerIdentifier](./model.spthy#L36)}.
 The rules can broadly be classified into "ground truth" rules which represent the intended behavior, e.g., the DNSSEC public key selected by the legitimate domain owner, and "protocol" rules, which represent knowledge learned from messages received over the network, e.g., checking the validity of a DNSSEC public key based on its DNSSEC chain to the root zone.
 On a high level, our model allows the creation of an arbitrary ground truth scenario (DNS hierarchies, levels of DNSSEC support, key compromises) and then proves our desired security properties on the protocol output with respect to the ground truth (e.g., the final security lemma states that if a domain uses DNSSEC (ground truth), the CA will not issue a certificate to the adversary).
 
