@@ -1,0 +1,2717 @@
+theory CryptographicDomainValidation
+begin
+
+// Message definitions
+
+// nsec bit map order:
+// [ caa ]
+
+// caa issue record:
+// <'caa', domain, '0', 'issue', caIdentifier, accountUri>
+
+// caa hsv record:
+// <'caa', domain, '0', 'hsv', caIdentifier, validationMethods, caOwnerId, globalOwnerId>
+// *OwnerId fields have the value 'empty' if they are not specified
+// validationMethods is bit array with the following method order:
+// 'dnssec-record-change', 'http-validation-over-tls', 'known-account-specifier' (used in combination with caOwnerId), 'private-key-control' (used in combination with globalOwnerId), 'http' (insecure), 'no-dnssec-record-change' (insecure)
+
+// validationMethods = <dnssecRecordChange, httpValidationOverTls, knownAccountSpecifier, privateKeyControl, http, noDnssecRecordChange>
+
+macros:
+      validationMethodDnssecRecordChange() = <'1', '0', '0', '0', '0', '0'>,
+      validationMethodKnownAccountSpecifier() = <'0', '0', '1', '0', '0', '0'>,
+      validationMethodHttp() = <'0', '0', '0', '0', '1', '0'>,
+      hsvCriticalFlag() = '1'
+
+builtins: signing
+
+functions: supportDnssecRecordChange/1, supportKnownAccountSpecifier/1
+equations:
+      supportDnssecRecordChange(<dnssecRecordChange, httpValidationOverTls, knownAccountSpecifier, privateKeyControl, http, noDnssecRecordChange>) = dnssecRecordChange,
+      supportKnownAccountSpecifier(<dnssecRecordChange, httpValidationOverTls, knownAccountSpecifier, privateKeyControl, http, noDnssecRecordChange>) = knownAccountSpecifier
+
+// ***** Restrictions *****
+
+// Assume that CA identifiers are unique
+restriction RegisterSingleCaPerIdentifier:
+   "All #i #j x. RegisterSingleCa(x)@#i & RegisterSingleCa(x)@#j ==> #i = #j"
+
+// Each domain has a single legitimate owner
+restriction RegisterSingleDomainOwnerPerDomain:
+   "All domain owner1 owner2 #i #j. ZoneOwnedBy(domain, owner1)@#i & ZoneOwnedBy(domain, owner2)@#j ==> #i = #j"
+
+// Ensure that each domain selects one DNSSEC key
+restriction RegisterSingleDnssecKeyPerDomain:
+   "All #i #j x. DnssecOptInSelected(x)@#i & DnssecOptInSelected(x)@#j ==> #i = #j"
+
+// Ensure that a benign domain will only create one type of NSEC request, i.e., PoA of domain, PoA of CAA records, PoP of CAA records
+restriction RegisterSingleNsecRequest:
+   "All domain #i #j. NsecRequestCreated(domain) @i & NsecRequestCreated(domain) @j ==> #i = #j"
+
+// Ensure that a benign domain will select one validation method, i.e., http, dns, dns-over-dnssec
+restriction SelectSingleValidationMethod:
+   "All domain domainOwner u1 u2 v1 v2 #i #j. ValidationMethodSelected(domain, domainOwner, u1, v1) @i & ValidationMethodSelected(domain, domainOwner, u2, v2) @j ==> #i = #j"
+
+// Only a single adversary exists. This does not impact the adversary since they can own multiple domains.
+restriction RegisterSingleAdversary:
+   "All #i #j x y. AdversaryCreated(x)@#i & AdversaryCreated(y)@#j ==> #i = #j"
+
+// Ensure that the created domain hierarchies:
+// - do not contain self references, e.g., ChildDomainCreated(d, d)
+restriction NoSelfReferencingChildren:
+   "not(Ex x #i. ChildDomainCreated(x, x) @i)"
+// - do not have the root as a child of another node, e.g., ChildDomainCreated(root, ...)
+restriction NoRootParentDomain:
+   "not(Ex root y #i #j. ChildDomainCreated(root, y) @i & DnssecRootCreated(root) @j)"
+// - only have a single parent per child, e.g., ChildDomainCreated(d, a) & ChildDomainCreated(d, b)
+restriction SingleParentPerDomain:
+   "All x y z #i #j. ChildDomainCreated(x, y) @i & ChildDomainCreated(x, z) @j ==> #i = #j"
+
+restriction SingleZoneOrLabelCreated:
+   "All domain #i #j. ZoneOrLabelCreated(domain) @i & ZoneOrLabelCreated(domain) @j ==> #i = #j"
+
+// There is no need to issue the same certificate twice, and it helps the prover to stop trying to reissue the same certificate multiple times, leading to a loop. Also, it should not impact the adversary since once a cert is issued, the adversary's goal is achieved
+restriction NoDuplicateIdenticalCertIssued:
+   "All ca domain publicKey #i #j. CertIssued(ca, domain, publicKey) @i & CertIssued(ca, domain, publicKey) @j ==> #i = #j"
+
+// Ensure that a DNSSEC chain is only considered secure if none of the chain domain owners have revealed their DNSSEC key
+restriction SecureChainDomainOwnersDidNotRevealDnssecKey:
+   "not(Ex domain domainOwner #i #j #k.
+         SecureChainExtended(domain) @i &
+         DnssecKeyRevealed(domain, domainOwner) @j &
+         ZoneOwnedBy(domain, domainOwner) @k)"
+
+// Reduce proof search space by only domain security statement once
+restriction SingleSecureChainPerDomain:
+   "All d #x #y. SecureChainExtended(d) @x & SecureChainExtended(d) @y ==> #x = #y"
+
+// Each domain owner only creates a single CAA record
+restriction OnlySingleCaaRecordCreatedPerDomainAndOwner:
+   "All domain domainOwner #i #j. SignedCaaRecordCreated(domain, domainOwner) @i & SignedCaaRecordCreated(domain, domainOwner) @j ==> #i = #j"
+
+// Generic equality restriction, e.g., used to compare signature verification results
+restriction Equality:
+   "All x y #i. Eq(x,y) @i ==> x = y"
+
+#ifdef nodebugrestrictions
+
+#else
+
+// ***** Debug only restrictions *****
+// these restrictions are only used to improve the visualization of proofs and do not impact the power of the adversary but can be removed and lead to the same outcome
+
+restriction NoDuplicateDsRecords:
+   "All domain closestEncloser domainDnssecPublicKey #i #j. DsRecordCreated(domain, closestEncloser, domainDnssecPublicKey) @i & DsRecordCreated(domain, closestEncloser, domainDnssecPublicKey) @j ==> #i = #j"
+
+restriction NoDuplicateDnssecDsOrRootValidations:
+   "All domain publicKey origin #i #j. IsValidDsOrRootDnssecKeyForDomain(domain, publicKey, origin) @i & IsValidDsOrRootDnssecKeyForDomain(domain, publicKey, origin) @j ==> #i = #j"
+
+restriction NoDuplicateDnssecLabelValidations:
+   "All domain publicKey origin #i #j. IsValidLabelDnssecKeyForDomain(domain, publicKey, origin) @i & IsValidLabelDnssecKeyForDomain(domain, publicKey, origin) @j ==> #i = #j"
+
+restriction NoDuplicateCertIssueRequests:
+   "All accountUri domain publicKey1 publicKey2 #i #j. CertIssueRequestCreated(accountUri, domain, publicKey1) @i & CertIssueRequestCreated(accountUri, domain, publicKey2) @j ==> #i = #j"
+
+restriction OnlySingleAccountPerDomainAndOwner:
+   "All domainOwner accountUri1 accountUri2 #i #j. AccountUriCreated(domainOwner, accountUri1) @i & AccountUriCreated(domainOwner, accountUri2) @j ==> #i = #j"
+
+restriction NoDuplicateDnssecValidationNonces:
+   "All caIdentifier domain accountUri #i #j. ValidationNonceCreated(caIdentifier, domain, accountUri) @i & ValidationNonceCreated(caIdentifier, domain, accountUri) @j ==> #i = #j"
+
+restriction NoDuplicateClosestEnclosers:
+   "All d p #i #j. ClosestEncloserCreated(d, p) @i & ClosestEncloserCreated(d, p) @j ==> #i = #j"
+
+#endif
+
+// ***** Entity Setup *****
+
+rule CreateSecureCa:
+   let
+      caIdentifier = 'ca_secure'
+   in
+   [
+      Fr(~ltk)
+   ]
+ --[
+      SecureParticipatingCaCreated(caIdentifier)
+    , SecureCaCreated(caIdentifier)
+    , CaPublicKey(caIdentifier, pk(~ltk))
+    , RegisterSingleCa(caIdentifier)
+   ]->
+   [
+      !CaPrivateKey(caIdentifier, ~ltk)
+    , !SecureCa(caIdentifier)
+    , Out(pk(~ltk))
+   ]
+
+rule CreateNonParticipatingSecureCa:
+   let
+      caIdentifier = 'ca_secure_non_participating'
+   in
+   [
+      Fr(~ltk)
+   ]
+ --[
+      SecureNonParticipatingCaCreated(caIdentifier)
+    , SecureCaCreated(caIdentifier)
+    , CaPublicKey(caIdentifier, pk(~ltk))
+    , RegisterSingleCa(caIdentifier)
+   ]->
+   [
+      !CaPrivateKey(caIdentifier, ~ltk)
+    , !NonParticipatingSecureCa(caIdentifier)
+    , Out(pk(~ltk))
+   ]
+
+rule CreateInsecureCaNoDnssec:
+   let
+      caIdentifier = 'ca_insecure_no_dnssec'
+   in
+   [
+      Fr(~ltk)
+   ]
+ --[
+      InsecureCaNoDnssecCreated(caIdentifier)
+    , CaPublicKey(caIdentifier, pk(~ltk))
+    , RegisterSingleCa(caIdentifier)
+   ]->
+   [
+      !CaPrivateKey(caIdentifier, ~ltk)
+    , !InsecureCaNoDnssec(caIdentifier)
+    , Out(pk(~ltk))
+   ]
+
+rule CreateInsecureCaNoCsrSignatureCheck:
+   let
+      caIdentifier = 'ca_insecure_no_csr_signature_check'
+   in
+   [
+      Fr(~ltk)
+   ]
+ --[
+      InsecureCaNoCsrSignatureCheckCreated(caIdentifier)
+    , CaPublicKey(caIdentifier, pk(~ltk))
+    , RegisterSingleCa(caIdentifier)
+   ]->
+   [
+      !CaPrivateKey(caIdentifier, ~ltk)
+    , !InsecureCaNoCsrSignatureCheck(caIdentifier)
+    , Out(pk(~ltk))
+   ]
+
+rule CreateDomainOwner:
+   [
+      Fr(~DomainOwner)
+   ]
+ --[
+      BenignDomainOwnerCreated(~DomainOwner)
+   ]->
+   [
+      !BenignDomainOwner(~DomainOwner)
+    , Out(~DomainOwner)
+   ]
+
+rule CreateAdversary:
+   [
+      Fr(~Adversary)
+   ]
+ --[
+      AdversaryCreated(~Adversary)
+   ]->
+   [
+      !Adversary(~Adversary)
+    , Out(~Adversary)
+   ]
+
+rule RegisterTlsKeys:
+   [
+      Fr(~ltk)
+    , !BenignDomainOwner(domainOwner)
+   ]
+ --[
+      TlsKeyRegistered(domainOwner, pk(~ltk))
+   ]->
+   [
+      !TlsPrivateKey(domainOwner, ~ltk)
+    , Out(pk(~ltk))
+   ]
+
+rule AdversaryRegisterTlsKey:
+   [
+      In(ltk)
+    , !Adversary(adversary)
+   ]
+ --[
+      TlsKeyRegistered(adversary, pk(ltk))
+   ]->
+   [
+      !TlsPrivateKey(adversary, ltk)
+    , Out(pk(ltk))
+   ]
+
+rule RevealDomainOwnerDnssecKey:
+   [
+      !DnssecPrivateKey(domain, domainOwner, ltk)
+    , !BenignDomainOwner(domainOwner)
+   ]
+ --[
+      DnssecKeyRevealed(domain, domainOwner)
+   ]->
+   [
+      Out(ltk)
+   ]
+
+rule RevealDomainOwnerTlsKey:
+   [
+      !TlsPrivateKey(domainOwner, ltk)
+    , !BenignDomainOwner(domainOwner)
+   ]
+ --[
+      TlsKeyRevealed(domainOwner)
+   ]->
+   [
+      Out(ltk)
+   ]
+
+// the adversary reveals all of its private keys to allow it to perform arbitrary calculations (not limited by tamarin model rule set)
+// not entirely sure if this is necessary or not
+rule AdversaryRevealAllKeys:
+   [
+      !Adversary(adversary)
+    , !DnssecPrivateKey(domain, adversary, dnssecPrivateKey)
+    , !TlsPrivateKey(adversary, tlsPrivateKey)
+   ]
+ --[
+      AdversaryKeysRevealed(domain)
+    , DnssecKeyRevealed(domain, adversary)
+    , TlsKeyRevealed(adversary)
+   ]->
+   [
+      Out(dnssecPrivateKey)
+    , Out(tlsPrivateKey)
+   ]
+
+// ***** DNS(SEC) Setup *****
+
+rule DomainOwnerCreatePopRequest:
+   [
+      In(domain)
+    , !BenignDomainOwner(domainOwner)
+   ]
+ --[
+      NsecRequestCreated(domain)
+   ]->
+   [
+      !PopRequest(domain, domainOwner)
+   ]
+
+rule DomainOwnerCreatePoaRequest:
+   [
+      In(domain)
+    , !BenignDomainOwner(domainOwner)
+   ]
+ --[
+      NsecRequestCreated(domain)
+   ]->
+   [
+      !PoaRequest(domain, domainOwner)
+   ]
+
+rule DomainOwnerCreatePopNoCaaRequest:
+   [
+      In(domain)
+    , !BenignDomainOwner(domainOwner)
+   ]
+ --[
+      NsecRequestCreated(domain)
+   ]->
+   [
+      !PopNoCaaRequest(domain, domainOwner)
+   ]
+
+rule AdversaryIssueRecords:
+   [
+      In(domain)
+    , !Adversary(adversary)
+   ]
+ --[
+   ]->
+   [
+      !PopRequest(domain, adversary)
+    , !PoaRequest(domain, adversary)
+    , !PopNoCaaRequest(domain, adversary)
+   ]
+
+// ***** ACME Setup *****
+
+rule CreateCsr:
+   let
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, sign(csr, privateKey)>
+   in
+   [
+      !CertIssueRequest(accountUri, domain, publicKey)
+    , !AccountUri(domainOwner, accountUri)
+    , !ZoneOwner(domain, domainOwner)
+    , !TlsPrivateKey(domainOwner, privateKey)
+   ]
+ --[
+      Eq(publicKey, pk(privateKey))
+    , CsrRequestCreatedDebug(domainOwner, accountUri, domain, publicKey)
+   ]->
+   [
+      Out(csrSigned)
+   ]
+
+rule CreateAccount:
+   [
+      Fr(~accountUri)
+    , !BenignDomainOwner(domainOwner)
+   ]
+ --[
+      AccountUriCreated(domainOwner, ~accountUri)
+   ]->
+   [
+      !AccountUri(domainOwner, ~accountUri)
+    , Out(~accountUri)
+   ]
+
+rule AdversaryCreateAccount:
+   [
+      Fr(~accountUri)
+    , !Adversary(adversary)
+   ]
+ --[
+      AccountUriCreated(adversary, ~accountUri)
+   ]->
+   [
+      !AccountUri(adversary, ~accountUri)
+    , Out(~accountUri)
+   ]
+
+rule CreateCertIssueRequest:
+   [
+      !AccountUri(domainOwner, accountUri)
+    , !TlsPrivateKey(domainOwner, tlsPrivateKey)
+    , !ZoneOwner(domain, domainOwner)
+   ]
+ --[
+      CertIssueRequestCreated(accountUri, domain, pk(tlsPrivateKey))
+   ]->
+   [
+      !CertIssueRequest(accountUri, domain, pk(tlsPrivateKey))
+   ]
+
+rule AdversaryCreateArbitraryIssueRequests:
+   [
+      !Adversary(adversary)
+    , !AccountUri(adversary, accountUri)
+    , In(domain)
+    , In(publicKey)
+   ]
+ --[
+      CertIssueRequestCreated(accountUri, domain, publicKey)
+   ]->
+   [
+      !CertIssueRequest(accountUri, domain, publicKey)
+   ]
+
+// ***** Allow arbitrary domain hierarchies *****
+
+rule CreateDomain:
+   [
+      !BenignDomainOwner(owner)
+    , In(zone)
+   ]
+ --[
+      ZoneOwnedBy(zone, owner)
+   ]->
+   [
+      !ZoneOwner(zone, owner)
+   ]
+
+rule CreateAdversaryDomain:
+   [
+      !Adversary(owner)
+    , In(zone)
+   ]
+ --[
+      ZoneOwnedBy(zone, owner)
+   ]->
+   [
+      !ZoneOwner(zone, owner)
+   ]
+
+rule CreateDnsHierarchy:
+   [
+      !ZoneOwner(domain, domainOwner)
+    , !Parent(parent, grandParent)
+   ]
+ --[
+      ChildDomainCreated(domain, parent)
+   ]->
+   [
+      !Parent(domain, parent)
+   ]
+
+rule CreateDnsHierarchyRootCase:
+   [
+      !ZoneOwner(domain, domainOwner)
+    , !DnssecRoot(root)
+   ]
+ --[
+      ChildDomainCreated(domain, root)
+   ]->
+   [
+      !Parent(domain, root)
+   ]
+
+rule AddRootZone:
+   [
+      !DnssecRoot(root)
+   ]
+ --[
+      ZoneCreated(root)
+    , ZoneOrLabelCreated(root)
+    , IsApexDomain(root, root)
+   ]->
+   [
+      !ApexDomain(root, root)
+   ]
+
+rule AddZone:
+   [
+      !Parent(domain, parent)
+    , !ApexDomain(parent, parentApex)
+   ]
+ --[
+      ZoneCreated(domain)
+    , ZoneOrLabelCreated(domain)
+    , IsApexDomain(domain, domain)
+   ]->
+   [
+      !ApexDomain(domain, domain)
+   ]
+
+rule AddLabel:
+   [
+      !Parent(domain, parent)
+    , !ApexDomain(parent, parentApex)
+      // only allow the addition of labels to a given zone if they have the same owner
+    , !ZoneOwner(parent, zoneOwner)
+    , !ZoneOwner(domain, zoneOwner)
+   ]
+ --[
+      LabelCreated(domain)
+    , ZoneOrLabelCreated(domain)
+    , IsApexDomain(domain, parentApex)
+   ]->
+   [
+      !ApexDomain(domain, parentApex)
+   ]
+
+// assume no empty non-terminals
+rule SetClosestEncloser:
+   [
+      !Parent(domain, parent)
+   ]
+ --[
+      ClosestEncloserCreated(domain, parent)
+   ]->
+   [
+      !ClosestEncloser(domain, parent)
+   ]
+
+// allow each zone to opt in to use DNSSEC or to not use DNSSEC
+rule DnssecOptIn:
+   [
+      Fr(~ltk)
+      // a zone is a domain where apex(domain) = domain
+    , !ApexDomain(zone, zone)
+    , !ZoneOwner(zone, owner)
+   ]
+ --[
+      DnssecOptInSelected(zone)
+      // used as ground truth for DNSSEC keys in lemmas (do not need owner part of the attributes)
+    , DnssecPublicKeySelected(zone, owner, pk(~ltk))
+   ]->
+   [
+      !DnssecOptIn(zone)
+    , !DnssecPrivateKey(zone, owner, ~ltk)
+    , !DnssecPublicKey(zone, pk(~ltk))
+    , Out(pk(~ltk))
+   ]
+
+rule CreateDnssecRoot:
+   let
+      domain = 'root'
+   in
+   [
+      !BenignDomainOwner(owner)
+   ]
+ --[
+      DnssecRootCreated(domain)
+    , ZoneOwnedBy(domain, owner)
+   ]->
+   [
+      !DnssecRoot(domain)
+    , !ZoneOwner(domain, owner)
+   ]
+
+rule StartSecureDnssecChain:
+   [
+      !DnssecRoot(root)
+    , !DnssecOptIn(root)
+   ]
+ --[
+      SecureChainExtended(root)
+   ]->
+   [
+      !DnssecSecureChainToRoot(root)
+   ]
+
+rule ExtendSecureDnssecChainToNewZone:
+   [
+      // all ancestor domains are secure
+      !Parent(domain, parent)
+    , !DnssecSecureChainToRoot(parent)
+      // ensure that we are at a zone cut
+    , !ApexDomain(domain, domain)
+      // ensure that owner is benign and used DNSSEC
+    , !ZoneOwner(domain, zoneOwner)
+    , !BenignDomainOwner(zoneOwner)
+    , !DnssecOptIn(domain)
+   ]
+ --[
+      SecureChainExtended(domain)
+   ]->
+   [
+      !DnssecSecureChainToRoot(domain)
+   ]
+
+rule ExtendSecureDnssecChainToNewLabel:
+   [
+      // all ancestor domains are secure
+      !DnssecSecureChainToRoot(parent)
+    , !Parent(domain, parent)
+      // ensures that we only extend secure chains in a zone if the zone apex is secure
+    , !DnssecSecureChainToRoot(domainZone)
+    , !ApexDomain(domain, domainZone)
+   ]
+ --[
+      SecureChainExtended(domain)
+    , SecureChainExtendedToNewLabel(domain)
+   ]->
+   [
+      !DnssecSecureChainToRoot(domain)
+   ]
+
+// ***** Heuristics *****
+
+tactic: HeuristicGenericSingleLevel
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^\s*(!Parent|ChildDomainCreated|!TransitiveParent)\(\s*'root'\s*,.*\)"
+// often leads to contradiction
+prio:
+   regex "(?s)^\s*!DnssecRoot\(\s*\S*\s*\)"
+// reduce unnecessary search on incorrect hierarchies
+prio:
+   regex "(?s)^\s*(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+
+lemma SecureDnssecChainNewLabelHasSecureApex [reuse]:
+   "
+   All domain zone #i #j.
+      SecureChainExtendedToNewLabel(domain) @i &
+      IsApexDomain(domain, zone) @j
+     ==>
+      (Ex #x. SecureChainExtended(zone) @x)
+   "
+
+// ***** DS Records *****
+
+rule CreateDsRecord:
+   let
+      dsRecord = <'ds', domain, parent, domainDnssecPublicKey>
+      signature = sign(dsRecord, parentDnssecPrivateKey)
+      dsRecordSigned = <dsRecord, signature>
+   in
+   [
+      // DS record always point to the zone apex
+      !ApexDomain(domain, domain)
+    , !DnssecOptIn(domain)
+    , !Parent(domain, parent)
+    , !ApexDomain(parent, parentZone)
+    , !DnssecPublicKey(domain, domainDnssecPublicKey)
+    , !DnssecPrivateKey(parentZone, parentZoneOwner, parentDnssecPrivateKey)
+   ]
+ --[
+      DsRecordCreated(domain, parent, domainDnssecPublicKey)
+   ]->
+   [
+      Out(dsRecordSigned)
+   ]
+
+rule ValidateDnssecKeyAtRoot:
+   let
+      origin = 'empty'
+   in
+   [
+      !DnssecRoot(root)
+    , !DnssecPublicKey(root, rootDnssecPublicKey)
+   ]
+ --[
+      IsValidDnssecKeyForDomain(root, rootDnssecPublicKey)
+    , IsValidDsOrRootDnssecKeyForDomain(root, rootDnssecPublicKey, origin)
+    , DnssecKeyValidatedUsingDelegationSignerOrRoot(root, rootDnssecPublicKey)
+   ]->
+   [
+      !ValidDnssecKeyForDomain(root, rootDnssecPublicKey)
+    , !ValidDnssecKeyDelegationSignerOrRoot(root, rootDnssecPublicKey, origin)
+   ]
+
+rule ValidateDnssecKeyDelegationSignerWithDsOrRootParent:
+   let
+      dsRecord = <'ds', domain, parent, domainDnssecPublicKey>
+      parentZoneDnssecPublicKey = pk(parentZoneDnssecPrivateKey)
+      signature = sign(dsRecord, parentZoneDnssecPrivateKey)
+      dsRecordSigned = <dsRecord, signature>
+   in
+   [
+      In(dsRecordSigned)
+    , !ValidDnssecKeyDelegationSignerOrRoot(parent, parentZoneDnssecPublicKey, parentKeyOrigin)
+    , !Parent(domain, parent)
+   ]
+ --[
+      IsValidDnssecKeyForDomain(domain, domainDnssecPublicKey)
+    , IsValidDsOrRootDnssecKeyForDomain(domain, domainDnssecPublicKey, parent)
+    , Eq(verify(signature, dsRecord, parentZoneDnssecPublicKey), true)
+    , DnssecKeyValidatedUsingDelegationSignerOrRoot(domain, domainDnssecPublicKey)
+   ]->
+   [
+      !ValidDnssecKeyForDomain(domain, domainDnssecPublicKey)
+    , !ValidDnssecKeyDelegationSignerOrRoot(domain, domainDnssecPublicKey, parent)
+   ]
+
+rule ValidateDnssecKeyDelegationSignerWithLabelParent:
+   let
+      dsRecord = <'ds', domain, parent, domainDnssecPublicKey>
+      parentZoneDnssecPublicKey = pk(parentZoneDnssecPrivateKey)
+      signature = sign(dsRecord, parentZoneDnssecPrivateKey)
+      dsRecordSigned = <dsRecord, signature>
+   in
+   [
+      In(dsRecordSigned)
+    , !ValidDnssecKeyLabel(parent, parentZoneDnssecPublicKey, parentKeyOrigin)
+    , !Parent(domain, parent)
+   ]
+ --[
+      IsValidDnssecKeyForDomain(domain, domainDnssecPublicKey)
+    , IsValidDsOrRootDnssecKeyForDomain(domain, domainDnssecPublicKey, parentKeyOrigin)
+    , Eq(verify(signature, dsRecord, parentZoneDnssecPublicKey), true)
+    , DnssecKeyValidatedUsingDelegationSignerOrRoot(domain, domainDnssecPublicKey)
+   ]->
+   [
+      !ValidDnssecKeyForDomain(domain, domainDnssecPublicKey)
+    , !ValidDnssecKeyDelegationSignerOrRoot(domain, domainDnssecPublicKey, parentKeyOrigin)
+   ]
+
+rule ValidateDnssecKeyChildDomainWithDsOrRootParent:
+   [
+      !ValidDnssecKeyDelegationSignerOrRoot(parent, parentZoneDnssecPublicKey, parentKeyOrigin)
+    , !Parent(domain, parent)
+   ]
+ --[
+      IsValidDnssecKeyForDomain(domain, parentZoneDnssecPublicKey)
+    , IsValidLabelDnssecKeyForDomain(domain, parentZoneDnssecPublicKey, parent)
+    , DnssecKeyValidatedUsingChildDomain(domain, parentZoneDnssecPublicKey)
+   ]->
+   [
+      !ValidDnssecKeyForDomain(domain, parentZoneDnssecPublicKey)
+    , !ValidDnssecKeyLabel(domain, parentZoneDnssecPublicKey, parent)
+   ]
+
+rule ValidateDnssecKeyChildDomainWithLabelParent:
+   [
+      !ValidDnssecKeyLabel(parent, parentZoneDnssecPublicKey, parentKeyOrigin)
+    , !Parent(domain, parent)
+   ]
+ --[
+      IsValidDnssecKeyForDomain(domain, parentZoneDnssecPublicKey)
+    , IsValidLabelDnssecKeyForDomain(domain, parentZoneDnssecPublicKey, parentKeyOrigin)
+    , DnssecKeyValidatedUsingChildDomain(domain, parentZoneDnssecPublicKey)
+   ]->
+   [
+      !ValidDnssecKeyForDomain(domain, parentZoneDnssecPublicKey)
+    , !ValidDnssecKeyLabel(domain, parentZoneDnssecPublicKey, parentKeyOrigin)
+   ]
+
+// ***** NSEC Record Issuance *****
+
+rule CreateNsecPopRecordBelowZoneCut:
+   let
+      bitmap = <'1'>
+      nsecRecord = <'nsecpop', domain, bitmap>
+      zonePublicKey = pk(zonePrivateKey)
+      signature = sign(nsecRecord, zonePrivateKey)
+      nsecRecordSigned = <nsecRecord, signature>
+   in
+   [
+      !PopRequest(domain, domainOwner)
+    , !ZoneOwner(domain, domainOwner)
+    , !ApexDomain(domain, zone)
+    , !DnssecPublicKey(zone, zonePublicKey)
+      // DS chain exists, i.e., zone only issues NSEC record if it has a valid chain (sanity check)
+    , !ValidDnssecKeyForDomain(zone, zonePublicKey)
+   ]
+ --[
+      AnyNsecRecordExistsDebug(domain)
+    , NsecPopRecordCreated(domain)
+   ]->
+   [
+      Out(nsecRecordSigned)
+   ]
+
+rule CreateNsecPopNoCaaRecordBelowZoneCut:
+   let
+      bitmap = <'0'>
+      nsecRecord = <'nsecpop', domain, bitmap>
+      zonePublicKey = pk(zonePrivateKey)
+      signature = sign(nsecRecord, zonePrivateKey)
+      nsecRecordSigned = <nsecRecord, signature>
+   in
+   [
+      !PopNoCaaRequest(domain, domainOwner)
+    , !ZoneOwner(domain, domainOwner)
+    , !ApexDomain(domain, zone)
+    , !DnssecPublicKey(zone, zonePublicKey)
+      // DS chain exists, i.e., zone only issues NSEC record if it has a valid chain (sanity check)
+    , !ValidDnssecKeyForDomain(zone, zonePublicKey)
+   ]
+ --[
+      AnyNsecRecordExistsDebug(domain)
+    , NsecPopNoCaaRecordCreated(domain)
+   ]->
+   [
+      Out(nsecRecordSigned)
+   ]
+
+// assume that benign domain owners always issue their PoA records for the direct parent of the given domain
+rule CreateNsecPoaRecord:
+   let
+      nsecRecord = <'nsecpoa', domain>
+      parentZonePublicKey = pk(parentZonePrivateKey)
+      signature = sign(nsecRecord, parentZonePrivateKey)
+      nsecRecordSigned = <nsecRecord, signature>
+   in
+   [
+      !PoaRequest(domain, domainOwner)
+    , !ZoneOwner(domain, domainOwner)
+    , !Parent(domain, parent)
+    , !ApexDomain(parent, parentZone)
+    , !DnssecPublicKey(parentZone, parentZonePublicKey)
+      // DS chain exists, i.e., parent zone only issues NSEC record if it has a valid chain (sanity check)
+    , !ValidDnssecKeyForDomain(parentZone, parentZonePublicKey)
+   ]
+ --[
+      AnyNsecRecordExistsDebug(domain)
+    , NsecPoaRecordCreated(domain)
+   ]->
+   [
+      Out(nsecRecordSigned)
+   ]
+
+// ***** Validation *****
+
+rule DomainOwnerValidationMethodDnssecRecordChange:
+   [
+      In(domain)
+    , !BenignDomainOwner(domainOwner)
+    , !ZoneOwner(domain, domainOwner)
+    , !AccountUri(domainOwner, accountUri)
+   ]
+ --[
+      ValidationMethodSelected(domain, domainOwner, accountUri, validationMethodDnssecRecordChange())
+   ]->
+   [
+      !ValidationDnssecRecordChangeSelected(domain, domainOwner, accountUri)
+   ]
+
+rule DomainOwnerValidationMethodHttp:
+   [
+      In(domain)
+    , !BenignDomainOwner(domainOwner)
+    , !ZoneOwner(domain, domainOwner)
+    , !AccountUri(domainOwner, accountUri)
+   ]
+ --[
+      ValidationMethodSelected(domain, domainOwner, accountUri, validationMethodHttp())
+   ]->
+   [
+      !ValidationHttpSelected(domain, domainOwner, accountUri)
+   ]
+
+rule AdversaryValidationMethodDnssecRecordChange:
+   [
+      In(domain)
+    , !Adversary(adversary)
+    , !AccountUri(adversary, accountUri)
+   ]
+ --[
+      ValidationMethodSelected(domain, adversary, accountUri, validationMethodDnssecRecordChange())
+   ]->
+   [
+      !ValidationDnssecRecordChangeSelected(domain, adversary, accountUri)
+   ]
+
+rule AdversaryValidationMethodHttp:
+   [
+      In(domain)
+    , !Adversary(adversary)
+    , !AccountUri(adversary, accountUri)
+   ]
+ --[
+      // ValidationMethodSelected(domain, domainOwner)
+      ValidationMethodSelected(domain, adversary, accountUri, validationMethodHttp())
+   ]->
+   [
+      !ValidationHttpSelected(domain, adversary, accountUri)
+   ]
+
+rule CaCreateValidationNonce:
+   [
+      Fr(~nonce)
+    , In(caIdentifier)
+    , In(domain)
+    , In(accountUri)
+   ]
+ --[
+      ValidationNonceCreated(caIdentifier, domain, accountUri)
+   ]->
+   [
+      !ValidationNonce(caIdentifier, domain, accountUri, ~nonce)
+      // an adversary may observe the nonce by inspecting the DNS records
+    , Out(~nonce)
+   ]
+
+rule SignValidationNonce:
+   let
+      validationRecord = <'valnonce', nonce>
+      validationRecordSigned = <validationRecord, sign(validationRecord, dnssecPrivateKey)>
+   in
+   [
+      !ValidationNonce(caIdentifier, domain, accountUri, nonce)
+      // only sign record if DNSSEC record change was requested
+    , !ZoneOwner(domain, domainOwner)
+    , !ValidationDnssecRecordChangeSelected(domain, domainOwner, accountUri)
+      // and the domain intends to request a certificate
+    , !CertIssueRequest(accountUri, domain, publicKey)
+    , !AccountUri(domainOwner, accountUri)
+    , !ApexDomain(domain, zone)
+    , !DnssecPrivateKey(zone, domainOwner, dnssecPrivateKey)
+   ]
+ --[
+      ValidationDnssecRecordChangeCreated(domain)
+   ]->
+   [
+      Out(validationRecordSigned)
+   ]
+
+// ***** CAA Record Setup *****
+
+rule CreateSignedCaaIssueRecordWithAccountUri:
+   let
+      caaRecord = <'caa', domain, critical, 'issue', caIdentifier, accountUri>
+      zonePublicKey = pk(zonePrivateKey)
+      signature = sign(caaRecord, zonePrivateKey)
+      caaRecordSigned = <caaRecord, signature>
+   in
+   [
+      // signed CAA record requested
+      !PopRequest(domain, domainOwner)
+    , !ZoneOwner(domain, domainOwner)
+      // valid DS chain exists for this domain
+    , !ApexDomain(domain, zone)
+    , !DnssecPublicKey(zone, zonePublicKey)
+      // DS chain exists, i.e., zone only issues CAA record if it has a valid chain (sanity check)
+    , !ValidDnssecKeyForDomain(zone, zonePublicKey)
+      // domain owner has this accountUri
+    , !AccountUri(domainOwner, accountUri)
+    , In(caIdentifier)
+      // the critical bit may or may not be set; there should not be a difference in the achieved security since all CAs must understand CAA issue records
+    , In(critical)
+   ]
+ --[
+      SignedCaaIssueRecordWithAccountUriCreated(domain, caIdentifier)
+      // debug only
+    , SignedCaaRecordCreated(domain, domainOwner)
+    , CryptographicDomainValidationCaaRecordCreated(domain)
+    , CaSelected(caIdentifier)
+   ]->
+   [
+      Out(caaRecordSigned)
+   ]
+
+rule CreateSignedCaaHsvRecordWithDnssecRecordChange:
+   let
+      validationMethods = validationMethodDnssecRecordChange()
+      caaRecord = <'caa', domain, hsvCriticalFlag(), 'hsv', caIdentifier, validationMethods, 'empty', 'empty'>
+      domainOwnerDnssecPublicKey = pk(domainOwnerDnssecPrivateKey)
+      signature = sign(caaRecord, domainOwnerDnssecPrivateKey)
+      caaRecordSigned = <caaRecord, signature>
+   in
+   [
+      // signed CAA HSV record requested
+      !PopRequest(domain, domainOwner)
+    , !ValidationDnssecRecordChangeSelected(domain, domainOwner, accountUri)
+      // valid DS chain exists for this domain
+    , !ApexDomain(domain, zone)
+    , !DnssecPublicKey(zone, domainOwnerDnssecPublicKey)
+      // DS chain exists, i.e., zone only issues CAA record if it has a valid chain (sanity check)
+    , !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // domain owner has this accountUri
+    , !ZoneOwner(domain, domainOwner)
+    , !AccountUri(domainOwner, accountUri)
+    , In(caIdentifier)
+   ]
+ --[
+      SignedCaaHsvRecordWithDnssecRecordChangeCreated(domain)
+      // debug only
+    , SignedCaaRecordCreated(domain, domainOwner)
+    , CryptographicDomainValidationCaaRecordCreated(domain)
+   ]->
+   [
+      Out(caaRecordSigned)
+   ]
+
+rule CreateSignedCaaHsvRecordWithKnownAccountSpecifier:
+   let
+      validationMethods = validationMethodKnownAccountSpecifier()
+      caaRecord = <'caa', domain, hsvCriticalFlag(), 'hsv', caIdentifier, validationMethods, accountUri, 'empty'>
+      domainOwnerDnssecPublicKey = pk(domainOwnerDnssecPrivateKey)
+      signature = sign(caaRecord, domainOwnerDnssecPrivateKey)
+      caaRecordSigned = <caaRecord, signature>
+   in
+   [
+      // signed CAA HSV record requested
+      !PopRequest(domain, domainOwner)
+      // valid DS chain exists for this domain
+    , !ApexDomain(domain, zone)
+    , !DnssecPublicKey(zone, domainOwnerDnssecPublicKey)
+      // DS chain exists, i.e., zone only issues CAA record if it has a valid chain (sanity check)
+    , !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // domain owner has this accountUri
+    , !ZoneOwner(domain, domainOwner)
+    , !AccountUri(domainOwner, accountUri)
+    , In(caIdentifier)
+   ]
+ --[
+      SignedCaaHsvRecordWithKnownAccountSpecifierCreated(domain)
+      // debug only
+    , SignedCaaRecordCreated(domain, domainOwner)
+    , CryptographicDomainValidationCaaRecordCreated(domain)
+   ]->
+   [
+      Out(caaRecordSigned)
+   ]
+
+rule CreateSignedNonCriticalCaaHsvRecordWithDnssecRecordChange:
+   let
+      validationMethods = validationMethodDnssecRecordChange()
+      caaRecord = <'caa', domain, '0', 'hsv', caIdentifier, validationMethods, 'empty', 'empty'>
+      domainOwnerDnssecPublicKey = pk(domainOwnerDnssecPrivateKey)
+      signature = sign(caaRecord, domainOwnerDnssecPrivateKey)
+      caaRecordSigned = <caaRecord, signature>
+   in
+   [
+      // signed CAA HSV record requested
+      !PopRequest(domain, domainOwner)
+    , !ValidationDnssecRecordChangeSelected(domain, domainOwner, accountUri)
+      // valid DS chain exists for this domain
+    , !ApexDomain(domain, zone)
+    , !DnssecPublicKey(zone, domainOwnerDnssecPublicKey)
+      // DS chain exists, i.e., zone only issues CAA record if it has a valid chain (sanity check)
+    , !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // domain owner has this accountUri
+    , !ZoneOwner(domain, domainOwner)
+    , !AccountUri(domainOwner, accountUri)
+    , In(caIdentifier)
+   ]
+ --[
+      SignedNonCriticalCaaHsvRecordWithDnssecRecordChangeCreated(domain)
+      // debug only
+    , SignedCaaRecordCreated(domain, domainOwner)
+   ]->
+   [
+      Out(caaRecordSigned)
+   ]
+
+// ***** Secure CA Implementation *****
+
+rule CaAcceptPopWithoutCaaRecord:
+   let
+      bitmap = <'0'>
+      nsecPopRecord = <'nsecpop', domain, bitmap>
+      nsecPopRecordSigned = <nsecPopRecord, nsecPopSignature>
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+   in
+   [
+      // valid DS chain exists
+      !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // cert was requested by account holder
+    , !CertIssueRequest(accountUri, domain, publicKey)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !SecureCa(caIdentifier)
+    , In(nsecPopRecordSigned)
+    , In(csrSigned)
+   ]
+ --[
+      Eq(verify(nsecPopSignature, nsecPopRecord, domainOwnerDnssecPublicKey), true)
+    , Eq(verify(csrSignature, csr, publicKey), true)
+    , AccountUriAccepted(caIdentifier, domain, accountUri)
+    , HttpValidationAccepted(caIdentifier, domain, accountUri)
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodHttp())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '0', 'empty', 'empty')
+    , CertIssued(caIdentifier, domain, publicKey)
+    , CaAcceptPopWithoutCaaRecordDebug(domain)
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+rule CaAcceptPoaWithoutCaaRecord:
+   let
+      nsecPoaRecord = <'nsecpoa', domain>
+      nsecRecordSigned = <nsecPoaRecord, signature>
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+   in
+   [
+      // valid DS chain exists for closestEncloser
+      !ClosestEncloser(domain, closestEncloser)
+    , !ValidDnssecKeyForDomain(closestEncloser, closestEncloserPublicKey)
+      // cert was requested by account holder
+    , !CertIssueRequest(accountUri, domain, publicKey)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !SecureCa(caIdentifier)
+    , In(nsecRecordSigned)
+    , In(csrSigned)
+   ]
+ --[
+      Eq(verify(signature, nsecPoaRecord, closestEncloserPublicKey), true)
+    , Eq(verify(csrSignature, csr, publicKey), true)
+    , AccountUriAccepted(caIdentifier, domain, accountUri)
+    , HttpValidationAccepted(caIdentifier, domain, accountUri)
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodHttp())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '0', 'empty', 'empty')
+    , CertIssued(caIdentifier, domain, publicKey)
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+rule CaAcceptSignedCaaIssueRecordWithAccountUri:
+   let
+      caaRecord = <'caa', domain, critical, caaTag, caIdentifier, accountUri>
+      caaTag = 'issue'
+      caaRecordSigned = <caaRecord, caaSignature>
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+   in
+   [
+      // valid DS chain exists
+      !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // cert was requested by account holder
+    , !CertIssueRequest(accountUri, domain, publicKey)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !SecureCa(caIdentifier)
+    , In(caaRecordSigned)
+    , In(csrSigned)
+   ]
+ --[
+      Eq(verify(caaSignature, caaRecord, domainOwnerDnssecPublicKey), true)
+    , Eq(verify(csrSignature, csr, publicKey), true)
+    , AccountUriAccepted(caIdentifier, domain, accountUri)
+    , HttpValidationAccepted(caIdentifier, domain, accountUri)
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodHttp())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '1', caaTag, '1')
+    , NsecPopAccepted(domain)
+    , CertIssued(caIdentifier, domain, publicKey)
+    , CaaValidationDnssecPublicKeyUsed(caIdentifier, domain, domainOwnerDnssecPublicKey)
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+rule CaAcceptSignedCaaHsvRecordForDnssecRecordChange:
+   let
+      validationMethods = validationMethodDnssecRecordChange()
+      caaRecord = <'caa', domain, critical, caaTag, caIdentifier, validationMethods, 'empty', globalOwnerId>
+      caaTag = 'hsv'
+      caaRecordSigned = <caaRecord, caaSignature>
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+      validationRecord = <'valnonce', nonce>
+      validationRecordSigned = <validationRecord, validationRecordSignature>
+   in
+   [
+      // valid DS chain exists
+      !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // cert was requested by account holder
+    , !CertIssueRequest(accountUri, domain, publicKey)
+      // correct validation nonce is provided
+    , !ValidationNonce(caIdentifier, domain, accountUri, nonce)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !SecureCa(caIdentifier)
+    , In(caaRecordSigned)
+    , In(csrSigned)
+    , In(validationRecordSigned)
+   ]
+ --[
+      Eq(verify(caaSignature, caaRecord, domainOwnerDnssecPublicKey), true)
+    , Eq(verify(csrSignature, csr, publicKey), true)
+    , Eq(verify(validationRecordSignature, validationRecord, domainOwnerDnssecPublicKey), true)
+    , DnssecValidationRecordAccepted(caIdentifier, domain, accountUri)
+    , Eq(supportDnssecRecordChange(validationMethods), '1')
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodDnssecRecordChange())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '1', caaTag, '1')
+    , NsecPopAccepted(domain)
+    , CertIssued(caIdentifier, domain, publicKey)
+    , CaaValidationDnssecPublicKeyUsed(caIdentifier, domain, domainOwnerDnssecPublicKey)
+
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+rule CaAcceptSignedCaaHsvRecordForKnownAccountSpecifier:
+   let
+      validationMethods = validationMethodKnownAccountSpecifier()
+      caaRecord = <'caa', domain, critical, caaTag, caIdentifier, validationMethods, accountUri, globalOwnerId>
+      caaTag = 'hsv'
+      caaRecordSigned = <caaRecord, caaSignature>
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+   in
+   [
+      // valid DS chain exists
+      !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // cert was requested by account holder
+    , !CertIssueRequest(accountUri, domain, publicKey)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !SecureCa(caIdentifier)
+    , In(caaRecordSigned)
+    , In(csrSigned)
+   ]
+ --[
+      Eq(verify(caaSignature, caaRecord, domainOwnerDnssecPublicKey), true)
+    , Eq(verify(csrSignature, csr, publicKey), true)
+    , KnownAccountSpecifierAccepted(caIdentifier, domain, accountUri)
+    , Eq(supportKnownAccountSpecifier(validationMethods), '1')
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodKnownAccountSpecifier())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '1', caaTag, '1')
+    , NsecPopAccepted(domain)
+    , CertIssued(caIdentifier, domain, publicKey)
+    , CaaValidationDnssecPublicKeyUsed(caIdentifier, domain, domainOwnerDnssecPublicKey)
+
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+rule CaAcceptUnsignedCaaRecord:
+   let
+      caaRecord = <'caa', domain, critical, caaTag, caIdentifier, accountUri>
+      caaTag = 'issue'
+      nsecPoaRecord = <'nsecpoa', domain>
+      nsecRecordSigned = <nsecPoaRecord, signature>
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+   in
+   [
+      // valid DS chain exists for closestEncloser
+      !ClosestEncloser(domain, closestEncloser)
+    , !ValidDnssecKeyForDomain(closestEncloser, closestEncloserPublicKey)
+      // cert was requested by account holder
+    , !CertIssueRequest(accountUri, domain, publicKey)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !SecureCa(caIdentifier)
+    , In(caaRecord)
+    , In(nsecRecordSigned)
+    , In(csrSigned)
+   ]
+ --[
+      Eq(verify(signature, nsecPoaRecord, closestEncloserPublicKey), true)
+    , Eq(verify(csrSignature, csr, publicKey), true)
+    , AccountUriAccepted(caIdentifier, domain, accountUri)
+    , HttpValidationAccepted(caIdentifier, domain, accountUri)
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodHttp())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '1', caaTag, '0')
+    , NsecPoaAccepted(domain)
+    , CertIssued(caIdentifier, domain, publicKey)
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+// ***** Non-Participating Secure CA *****
+// CA that performs DNSSEC checks but ignores HSV records without critical flags
+
+rule NonParticipatingCaIgnoreNonCriticalSignedCaaHsvRecordDowngradeToHttpValidation:
+   let
+      validationMethods = validationMethodDnssecRecordChange()
+      caaRecord = <'caa', domain, '0', caaTag, caIdentifier, validationMethods, 'empty', globalOwnerId>
+      caaTag = 'hsv'
+      caaRecordSigned = <caaRecord, caaSignature>
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+   in
+   [
+      // valid DS chain exists
+      !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // cert was requested by account holder
+    , !CertIssueRequest(accountUri, domain, publicKey)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !NonParticipatingSecureCa(caIdentifier)
+    , In(caaRecordSigned)
+    , In(csrSigned)
+    , In(validationRecordSigned)
+    , In(requestedValidationMethod)
+   ]
+ --[
+      Eq(verify(caaSignature, caaRecord, domainOwnerDnssecPublicKey), true)
+    , Eq(verify(csrSignature, csr, publicKey), true)
+    , HttpValidationRecordAccepted(caIdentifier, domain, accountUri)
+      // , Eq(supportDnssecRecordChange(validationMethods), '1')
+      // since the validation methods defined in HSV are ignored, the adversary uses http validation
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodHttp())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '1', caaTag, '1')
+    , NsecPopAccepted(domain)
+    , CertIssued(caIdentifier, domain, publicKey)
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+// ***** Insecure CAs Implementation *****
+
+// CA omitting CSR signature check
+rule InsecureCaNoCsrSignatureCheckAcceptSignedCaaRecord:
+   let
+      caaRecord = <'caa', domain, critical, caaTag, caIdentifier, accountUri>
+      caaTag = 'issue'
+      caaRecordSigned = <caaRecord, caaSignature>
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+   in
+   [
+      // valid DS chain exists
+      !ValidDnssecKeyForDomain(domain, domainOwnerDnssecPublicKey)
+      // cert was requested by account holder
+    , !CertIssueRequest(accountUri, domain, publicKey)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !InsecureCaNoCsrSignatureCheck(caIdentifier)
+    , In(caaRecordSigned)
+    , In(csrSigned)
+   ]
+ --[
+      Eq(verify(caaSignature, caaRecord, domainOwnerDnssecPublicKey), true)
+      // , Eq(verify(csrSignature, csr, publicKey), true)
+    , AccountUriAccepted(caIdentifier, domain, accountUri)
+    , HttpValidationAccepted(caIdentifier, domain, accountUri)
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodHttp())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '1', caaTag, '1')
+    , NsecPopAccepted(domain)
+    , CertIssued(caIdentifier, domain, publicKey)
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+// CA omitting DNSSEC validation
+rule InsecureCaNoDnssecAcceptCaaRecord:
+   let
+      caaRecord = <'caa', domain, critical, caaTag, caIdentifier, accountUri>
+      caaTag = 'issue'
+      csr = <'csr', domain, publicKey>
+      csrSigned = <csr, csrSignature>
+      cert = <'cert', domain, publicKey, caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+   in
+   [
+      !CertIssueRequest(accountUri, domain, publicKey)
+    , !InsecureCaNoDnssec(caIdentifier)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , In(caaRecord)
+    , In(csrSigned)
+   ]
+ --[
+      Eq(verify(csrSignature, csr, publicKey), true)
+    , AccountUriAccepted(caIdentifier, domain, accountUri)
+    , HttpValidationAccepted(caIdentifier, domain, accountUri)
+    , ValidationMethodAccepted(caIdentifier, domain, accountUri, validationMethodHttp())
+    , CaaValidationOutcome(caIdentifier, domain, accountUri, '1', caaTag, '0')
+    , CertIssued(caIdentifier, domain, publicKey)
+   ]->
+   [
+      Out(certSigned)
+   ]
+
+rule SignTlsTranscript:
+   let
+      cert = <'cert', domain, pk(privateKey), caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+      tlsTranscript = <'transcript', domain>
+      tlsTranscriptSigned = <tlsTranscript, sign(tlsTranscript, privateKey)>
+   in
+   [
+      !TlsPrivateKey(domainOwner, privateKey)
+    , !ZoneOwner(domain, domainOwner)
+    , !CaPrivateKey(caIdentifier, caPrivateKey)
+    , In(certSigned)
+    , In(tlsTranscript)
+   ]
+ --[
+      CanSignTlsTranscript(domain, domainOwner, caIdentifier)
+   ]->
+   [
+      Out(tlsTranscriptSigned)
+   ]
+
+rule AdversarySignTlsTranscript:
+   let
+      cert = <'cert', domain, pk(privateKey), caIdentifier>
+      certSigned = <cert, sign(cert, caPrivateKey)>
+      tlsTranscript = <'transcript', domain>
+      tlsTranscriptSigned = <tlsTranscript, sign(tlsTranscript, privateKey)>
+   in
+   [
+      !CaPrivateKey(caIdentifier, caPrivateKey)
+    , !Adversary(adversary)
+    , In(certSigned)
+    , In(tlsTranscript)
+    , In(privateKey)
+   ]
+ --[
+      CanSignTlsTranscript(domain, adversary, caIdentifier)
+   ]->
+   [
+      Out(tlsTranscriptSigned)
+   ]
+
+lemma HasApexDomain [reuse,use_induction]:
+   "
+   All domain zone #i.
+      IsApexDomain(domain, zone) @i
+     ==>
+      (Ex #x. IsApexDomain(zone, zone) @x)
+   "
+
+tactic: HeuristicTransitiveDomainAndParentAndApexDomain
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^\s*(!Parent|ChildDomainCreated|!TransitiveParent)\(\s*'root'\s*,.*\)"
+// often leads to contradiction
+prio:
+   regex "(?s)^\s*!DnssecRoot\(\s*\S*\s*\)"
+// initial rule
+prio:
+   regex "(?s)^\s*IsAncestorDomain\(\s*(domain)\s*,\s*ancestor\s*\)"
+// reduce unnecessary search on incorrect hierarchies
+prio:
+   regex "(?s)^\s*(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+// guide search toward goal
+prio:
+   regex "(?s)^\s*!TransitiveParent\(\s*parent\s*,.*\)"
+prio:
+   regex "(?s)^\s*(!ApexDomain|IsApexDomain)\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)^\s*(!ApexDomain|IsApexDomain)\(\s*('root'|parent)\s*,.*\)"
+prio:
+   regex "(?s)^\s*(!ApexDomain|IsApexDomain)\(\s*ancestor\s*,.*\)"
+
+lemma SecureChainExtendsToOwnZone [reuse,heuristic={HeuristicTransitiveDomainAndParentAndApexDomain}]:
+   "
+   All domain zone #i #j.
+      SecureChainExtended(domain) @i &
+      IsApexDomain(domain, zone) @j
+     ==>
+      (Ex #x. SecureChainExtended(zone) @x)
+   "
+
+tactic: HeuristicDomainAndParentSecureChain
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^\s*(!Parent|ChildDomainCreated|!TransitiveParent)\(\s*'root'\s*,.*\)"
+// often leads to contradiction
+prio:
+   regex "(?s)^\s*!DnssecRoot\(\s*\S*\s*\)"
+// initial rule
+prio:
+   regex "(?s)^\s*SecureChainExtended\(\s*domain\s*\)"
+// reduce unnecessary search on incorrect hierarchies
+prio:
+   regex "(?s)^\s*(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+// guide search toward goal
+prio:
+   regex "(?s)^\s*!DnssecSecureChainToRoot\(\s*('root'|parent)\s*\)"
+prio:
+   regex "(?s)^\s*(!ApexDomain|IsApexDomain)\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)^\s*(!ApexDomain|IsApexDomain)\(\s*('root'|parent)\s*,.*\)"
+prio:
+   regex "(?s)^\s*(!ApexDomain|IsApexDomain)\(\s*ancestor\s*,.*\)"
+
+lemma SecureChainExtendsToParentZone [reuse,use_induction,heuristic={HeuristicDomainAndParentSecureChain}]:
+   "
+   All domain parent parentZone #i #j #k #l.
+      SecureChainExtended(domain) @i &
+      IsApexDomain(domain, domain) @j &
+      ChildDomainCreated(domain, parent) @k &
+      IsApexDomain(parent, parentZone) @l
+     ==>
+      (Ex #x. SecureChainExtended(parentZone) @x)
+   "
+
+lemma SingleDomainOwnerPerZone [reuse,use_induction,heuristic=c]:
+   "
+   All domain zone owner #i #j.
+      IsApexDomain(domain, zone) @i &
+      ZoneOwnedBy(domain, owner) @j
+     ==>
+      (Ex #x. ZoneOwnedBy(zone, owner) @x)
+   "
+
+lemma SingleZonePerDomain [reuse,heuristic=c]:
+   "
+   All domain zone1 zone2 #i #j.
+      IsApexDomain(domain, zone1) @i & IsApexDomain(domain, zone2) @j
+     ==>
+      zone1 = zone2
+   "
+
+lemma NoCyclicZonesParentHeuGeneric [reuse,use_induction,heuristic={HeuristicGenericSingleLevel}]:
+   "
+   All domain parent #i.
+      ChildDomainCreated(domain, parent) @i
+     ==>
+      not(Ex #x. IsApexDomain(parent, domain) @x)
+   "
+
+tactic: CustomHeuristicValidDnssecKeySelectedByRoot
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^DnssecPublicKeySelected\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+// always resolve the parent of "domain" to ensure that we resolve to a single DNS hierarchy
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+// immediately contradict an adversary-controlled root domain
+prio:
+   regex "(?s)(!ZoneOwner|ZoneOwnedBy)\(\s*'root'\s*,\s*.*\s*\)"
+prio:
+   regex "(?s)(!BenignDomainOwner)\(\s*~Adversary\s*\)"
+// resolve SecureChainExtended, IsApexDomain, and IsValidDnssecKeyForDomain for domain, then parent and root
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*domain\s*\)"
+prio:
+   regex "(?s)^(!ApexDomain|IsApexDomain)\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|IsValidDnssecKeyForDomain)\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(parent|'root')\s*\)"
+// restrict to only resolve parent domain to root
+prio:
+   regex "(?s)^(!ApexDomain|IsApexDomain)\(\s*(parent|'root')\s*,\s*'root'\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain)\(\s*(parent|'root')\s*,.*\)"
+prio:
+   regex "(?s)<\s*'ds'\s*,\s*domain\s*,.*>"
+prio:
+   regex "(?s)^!KU\(\s*~ltk\s*\)"
+// helps prevent endless loops
+deprio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*parent\s*,.*\)"
+// not necessary to resolve induction lemma
+deprio:
+   regex "(?s)last\(\s*#.*\)"
+
+lemma ValidDnssecKeySelectedByRoot [reuse, use_induction, heuristic={CustomHeuristicValidDnssecKeySelectedByRoot}]:
+   "
+   All domain root dnssecPublicKey #i #j #k #l.
+      DnssecRootCreated(root) @i &
+      SecureChainExtended(domain) @j &
+      IsApexDomain(domain, root) @k &
+      IsValidDnssecKeyForDomain(domain, dnssecPublicKey) @l
+     ==>
+      (Ex rootOwner #x. DnssecPublicKeySelected(root, rootOwner, dnssecPublicKey) @x)
+   "
+
+tactic: CustomHeuristicSecureChainOwnedByBenignDomainOwner
+presort: c
+prio:
+   regex "(?s)SecureChainExtended\(\s*domain\s*\)"
+prio:
+   regex "(?s)!DnssecRoot\(\s*domain\s*\)"
+prio:
+   regex "(?s)^\s*(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)(!ApexDomain)\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)(!DnssecSecureChainToRoot)\(\s*(domain|domainZone)\s*\)"
+prio:
+   regex "(?s)(!ZoneOwner)\(\s*domain\s*,\s*.*\s*\)"
+prio:
+   regex "(?s)(!BenignDomainOwner)\(\s*~Adversary\s*\)"
+
+lemma SecureChainOwnedByBenignDomainOwner [reuse, use_induction, heuristic={CustomHeuristicSecureChainOwnedByBenignDomainOwner}]:
+   "
+   All domain owner #i #j.
+      SecureChainExtended(domain) @i &
+      ZoneOwnedBy(domain, owner) @j
+     ==>
+      (Ex #x. BenignDomainOwnerCreated(owner) @x)
+   "
+
+// secure CA: security properties
+
+tactic: CustomHeuristicValidPublicKeyIsNotKnownToAdversary
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+// always resolve the parent of "domain" and "parent" first to ensure that we resolve to a single DNS hierarchy
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*(domain|parent)\s*,.*\)"
+// If possible, try to resolve a DNSSEC private key known to the adversary, which typically leads to a contradiction
+prio:
+   regex "(?s)^!KU\(\s*~ltk\s*\)"
+// Prioritize domains as follows: (1) domain, (2) parent, (3) grandParent, (4) root, (5) delegationZone
+// Then prioritize facts as follows for each of these domains: (1) SecureChainExtended, (2) IsValidDnssecKeyForDomain, (3) <'ds', ...> record (only for domain and parent)
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*domain\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)<\s*'ds'\s*,\s*domain\s*,.*>"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*parent\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*parent\s*,.*\)"
+prio:
+   regex "(?s)<\s*'ds'\s*,\s*parent\s*,.*>"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*grandParent\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*grandParent\s*,.*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*'root'\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*delegationZone\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*delegationZone\s*,.*\)"
+
+// Prove that each label domain must start with a domain (zone apex) with a DS delegation
+lemma DnssecKeyValidatedUsingLabelMustHaveDelegationSignerOrRootAncestor [reuse, use_induction, heuristic={CustomHeuristicValidPublicKeyIsNotKnownToAdversary}]:
+   "
+   All domain dnssecPublicKey #i #j.
+      // #k.
+      SecureChainExtended(domain) @i &
+      DnssecKeyValidatedUsingChildDomain(domain, dnssecPublicKey) @j
+     ==>
+      (Ex delegationZone #x #y.
+         SecureChainExtended(delegationZone) @x &
+         DnssecKeyValidatedUsingDelegationSignerOrRoot(delegationZone, dnssecPublicKey) @y &
+         #x < #i &
+         #y < #j)
+   "
+
+tactic: CustomHeuristicValidPublicKeyIsNotKnownToAdversaryApexOnly
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+// always resolve the parent of "domain" and "parent" first to ensure that we resolve to a single DNS hierarchy
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*(domain|parent)\s*,.*\)"
+// If possible, try to resolve a DNSSEC private key known to the adversary, which typically leads to a contradiction
+prio:
+   regex "(?s)^!KU\(\s*~ltk\s*\)"
+// Prioritize domains as follows: (1) domain, (2) parent|origin, (3) grandParent, (4) root, (5) delegationZone
+// Then prioritize facts as follows for each of these domains: (1) SecureChainExtended, (2) IsValidDnssecKeyForDomain, (3) <'ds', ...> record (only for domain and parent)
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*domain\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)<\s*'ds'\s*,\s*domain\s*,.*>"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(parent|origin)\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*(parent|origin)\s*,.*\)"
+prio:
+   regex "(?s)<\s*'ds'\s*,\s*(parent|origin)\s*,.*>"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*grandParent\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*grandParent\s*,.*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*'root'\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*delegationZone\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*delegationZone\s*,.*\)"
+
+// Prove property for domains (zone apexes) with DS delegations
+lemma ValidPublicKeyIsNotKnownToAdversaryApexOnly [reuse, use_induction, heuristic={CustomHeuristicValidPublicKeyIsNotKnownToAdversaryApexOnly}]:
+   "
+   All domain origin dnssecPublicKey #i #j.
+      SecureChainExtended(domain) @i &
+      IsValidDsOrRootDnssecKeyForDomain(domain, dnssecPublicKey, origin) @j
+     ==>
+      not(Ex dnssecPrivateKey #x.
+         pk(dnssecPrivateKey) = dnssecPublicKey &
+         !KU(dnssecPrivateKey) @x)
+   "
+
+lemma ValidPublicKeyIsNotKnownToAdversary [reuse, heuristic={CustomHeuristicValidPublicKeyIsNotKnownToAdversary}]:
+   "
+   All domain dnssecPublicKey #i #j.
+      SecureChainExtended(domain) @i &
+      IsValidDnssecKeyForDomain(domain, dnssecPublicKey) @j
+     ==>
+      not(Ex dnssecPrivateKey #x.
+         pk(dnssecPrivateKey) = dnssecPublicKey &
+         !KU(dnssecPrivateKey) @x)
+   "
+
+tactic: CustomHeuristicSecureRecordChangeIssuance
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+// always resolve the parent of "domain" and "parent" first to ensure that we resolve to a single DNS hierarchy
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+// Prioritize domains as follows: (1) domain, (2) parent, (3) grandParent, (4) root, (5) delegationZone
+// Then prioritize facts as follows for each of these domains: (1) SecureChainExtended, (2) IsValidDnssecKeyForDomain, (3) <'ds', ...> record (only for domain and parent)
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(domain|'root')\s*\)"
+prio:
+   regex "(?s)DnssecValidationRecordAccepted\(.*\)"
+prio:
+   regex "(?s)^(SecureCaCreated|!SecureCa)\(.*\)"
+prio:
+   regex "(?s)^!NonParticipatingSecureCa\(.*\)"
+prio:
+   regex "(?s)^!ValidationNonce\(.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*'valnonce'\s*,.*>.*\)"
+prio:
+   regex "(?s)^!PopRequest\(.*\)"
+prio:
+   regex "(?s)^!ZoneOwner\(\s*(domain|'root')\s*,\s*~Adversary\s*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*'caa'\s*,.*>.*\)"
+prio:
+   regex "(?s)^!ValidDnssecKeyForDomain\(\s*(domain|'root')\s*,\s*pk\(\s*x\s*\)\s*\)"
+
+lemma SecureRecordChangeIssuance [reuse, heuristic={CustomHeuristicSecureRecordChangeIssuance}]:
+   "
+   All ca domain u #i #j #k #l.
+      // If a DNSSEC record change validation method is requested by the legitimate owner
+      DnssecValidationRecordAccepted(ca, domain, u) @i &
+      SecureCaCreated(ca) @j &
+      SecureChainExtended(domain) @k &
+      SignedCaaHsvRecordWithDnssecRecordChangeCreated(domain) @l
+     ==>
+      // then the account URI belongs to the legitimate domain owner
+      (Ex owner #x #y.
+         ZoneOwnedBy(domain, owner) @x &
+         // it was the legitimate DNSSEC protected validation record
+         // ValidationDnssecRecordChangeSelectedByAccountUri(domain, owner, u) @y &
+         AccountUriCreated(owner, u) @y
+      )
+   "
+
+tactic: CustomHeuristicKnownAccountSpecifierIssuance
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+// always resolve the parent of "domain" and "parent" first to ensure that we resolve to a single DNS hierarchy
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+// Prioritize domains as follows: (1) domain, (2) parent, (3) grandParent, (4) root, (5) delegationZone
+// Then prioritize facts as follows for each of these domains: (1) SecureChainExtended, (2) IsValidDnssecKeyForDomain, (3) <'ds', ...> record (only for domain and parent)
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(domain|'root')\s*\)"
+prio:
+   regex "(?s)KnownAccountSpecifierAccepted\(.*\)"
+      // regex "(?s)DnssecValidationRecordAccepted\(.*\)"
+prio:
+   regex "(?s)^(!ZoneOwner|ZoneOwnedBy)\(\s*(domain|'root')\s*,.*\)"
+prio:
+   regex "(?s)^(SecureCaCreated|!SecureCa)\(.*\)"
+prio:
+   regex "(?s)^!NonParticipatingSecureCa\(.*\)"
+prio:
+   regex "(?s)^!ValidationNonce\(.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*'valnonce'\s*,.*>.*\)"
+prio:
+   regex "(?s)^!PopRequest\(.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*'caa'\s*,.*>.*\)"
+prio:
+   regex "(?s)^!ValidDnssecKeyForDomain\(\s*(domain|'root')\s*,\s*pk\(\s*x\s*\)\s*\)"
+
+lemma KnownAccountSpecifierIssuance [reuse, heuristic={CustomHeuristicKnownAccountSpecifierIssuance}]:
+   "
+   All ca domain u #i #j #k #l.
+      // If a DNSSEC record change validation method is requested by the legitimate owner
+      KnownAccountSpecifierAccepted(ca, domain, u) @i &
+      SecureCaCreated(ca) @j &
+      SecureChainExtended(domain) @k &
+      SignedCaaHsvRecordWithKnownAccountSpecifierCreated(domain) @l
+     ==>
+      // then the account URI belongs to the legitimate domain owner
+      (Ex owner #x #y.
+         ZoneOwnedBy(domain, owner) @x &
+         // it was the legitimate DNSSEC protected validation record
+         // ValidationDnssecRecordChangeSelectedByAccountUri(domain, owner, u) @y &
+         AccountUriCreated(owner, u) @y
+      )
+   "
+
+tactic: CustomHeuristicCaaIssueAccountUriIssuance
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+// always resolve the parent of "domain" and "parent" first to ensure that we resolve to a single DNS hierarchy
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+// Prioritize domains as follows: (1) domain, (2) parent, (3) grandParent, (4) root, (5) delegationZone
+// Then prioritize facts as follows for each of these domains: (1) SecureChainExtended, (2) IsValidDnssecKeyForDomain, (3) <'ds', ...> record (only for domain and parent)
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(domain|'root')\s*\)"
+prio:
+   regex "(?s)^AccountUriAccepted\(.*\)"
+prio:
+   regex "(?s)^(!ZoneOwner|ZoneOwnedBy)\(\s*(domain|'root')\s*,.*\)"
+prio:
+   regex "(?s)^(SecureCaCreated|!SecureCa)\(.*\)"
+prio:
+   regex "(?s)^!NonParticipatingSecureCa\(.*\)"
+prio:
+   regex "(?s)^!InsecureCaNoCaaSignatureCheck\(.*\)"
+prio:
+   regex "(?s)^!InsecureCaNoCsrSignatureCheck\(.*\)"
+prio:
+   regex "(?s)^!InsecureCaNoDnssec\(.*\)"
+prio:
+   regex "(?s)^!PopRequest\(.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*('nsecpoa'|'nsecpop'|'caa')\s*,.*>,.*\)"
+prio:
+   regex "(?s)^!ClosestEncloser\(\s*(domain|'root')\s*,\s*closestEncloser\s*\)"
+prio:
+   regex "(?s)^!CertIssueRequest\(.*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*closestEncloser\s*\)"
+prio:
+   regex "(?s)^!ValidDnssecKeyForDomain\(\s*(domain|closestEncloser|'root')\s*,\s*pk\(\s*x\s*\)\s*\)"
+
+lemma CaaIssueAccountUriIssuance [reuse, heuristic={CustomHeuristicCaaIssueAccountUriIssuance}]:
+   "
+   All ca domain u #i #j #k #l.
+      // if an account URI is accepted by the legitimate CA
+      AccountUriAccepted(ca, domain, u) @i &
+      SecureCaCreated(ca) @j &
+      SecureChainExtended(domain) @k &
+      SignedCaaIssueRecordWithAccountUriCreated(domain, ca) @l
+     ==>
+      // then the account URI belongs to the legitimate domain owner
+      (Ex owner #x #y.
+         ZoneOwnedBy(domain, owner) @x &
+         // it was the legitimate URI
+         AccountUriCreated(owner, u) @y
+      )
+   "
+
+tactic: CustomHeuristicNoFakeCertificateIssuance
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+// always resolve the parent of "domain" and "parent" first to ensure that we resolve to a single DNS hierarchy
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*domain\s*,.*\)"
+// Prioritize domains as follows: (1) domain, (2) parent, (3) grandParent, (4) root, (5) delegationZone
+// Then prioritize facts as follows for each of these domains: (1) SecureChainExtended, (2) IsValidDnssecKeyForDomain, (3) <'ds', ...> record (only for domain and parent)
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(domain|'root')\s*\)"
+prio:
+   regex "(?s)^AccountUriAccepted\(.*\)"
+prio:
+   regex "(?s)^(!ZoneOwner|ZoneOwnedBy)\(\s*(domain|'root')\s*,.*\)"
+prio:
+   regex "(?s)^!InsecureCaNoCaaSignatureCheck\(.*\)"
+prio:
+   regex "(?s)^!InsecureCaNoCsrSignatureCheck\(.*\)"
+prio:
+   regex "(?s)^!InsecureCaNoDnssec\(.*\)"
+prio:
+   regex "(?s)^!NonParticipatingSecureCa\(.*\)"
+prio:
+   regex "(?s)^CertIssued\(.*\)"
+prio:
+   regex "(?s)^!CertIssueRequest\(.*\)"
+prio:
+   regex "(?s)^CryptographicDomainValidationCaaRecordCreated\(.*\)"
+prio:
+   regex "(?s)^!PopRequest\(.*\)"
+prio:
+   regex "(?s)^!ZoneOwner\(\s*domain\s*,\s*~Adversary\s*\)"
+prio:
+   regex "(?s)^AccountUriCreated\(.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*('nsecpoa'|'nsecpop'|'caa')\s*,.*>,.*\)"
+prio:
+   regex "(?s)^!ClosestEncloser\(\s*(domain|'root')\s*,\s*closestEncloser\s*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*closestEncloser\s*\)"
+prio:
+   regex "(?s)^!ValidDnssecKeyForDomain\(\s*(domain|closestEncloser|'root')\s*,\s*pk\(\s*x\s*\)\s*\)"
+
+lemma NoFakeCertificateIssuance [reuse, heuristic={CustomHeuristicNoFakeCertificateIssuance}]:
+   "
+   All ca domain publicKey #i #j #k #l.
+      // if a certificate is issued for victim_com
+      CertIssued(ca, domain, publicKey) @i &
+      SecureCaCreated(ca) @j &
+      SecureChainExtended(domain) @k &
+      CryptographicDomainValidationCaaRecordCreated(domain) @l
+     ==>
+      (Ex owner #x. ZoneOwnedBy(domain, owner) @x & (
+            // the certificate has the same public key as the one requested by the domain owner, or
+            (Ex #y. TlsKeyRegistered(owner, publicKey) @y) |
+            // the domain owner's TLS private key was revealed to the adversary
+            (Ex #y. TlsKeyRevealed(owner) @y)))
+   "
+
+tactic: CustomHeuristicOnlyLegitimateDomainOwnerCanAuthenticate
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+prio:
+   regex "(?s)^!ZoneOwner\(\s*domain\s*,.*\)"
+prio:
+   regex "(?s)^CanSignTlsTranscript\(.*\)"
+prio:
+   regex "(?s)^!Adversary\(.*\)"
+prio:
+   regex "(?s)^CryptographicDomainValidationCaaRecordCreated\(.*\)"
+prio:
+   regex "(?s)^!TlsPrivateKey\(.*\)"
+prio:
+   regex "(?s)^SecureCaCreated\(.*\)"
+prio:
+   regex "(?s)sign\(<'cert'\s*,.*>.*\)"
+prio:
+   regex "(?s)^!KU\(\s*~ltk.*\)"
+prio:
+   regex "(?s)TlsKeyRegistered\(.*\)"
+prio:
+   regex "(?s)^!CaPrivateKey\(.*\)"
+
+lemma OnlyLegitimateDomainOwnerCanAuthenticate [heuristic={CustomHeuristicOnlyLegitimateDomainOwnerCanAuthenticate}]:
+   "
+   All domain tlsAuthenticator ca #i #j #l #m.
+      // if an entity can use a cert from secure CA for secure domain to authenticate itself,
+      CanSignTlsTranscript(domain, tlsAuthenticator, ca) @i &
+      SecureCaCreated(ca) @j &
+      // the domain owner created a DNSSEC-protected CAA record to provide cryptographic security
+      CryptographicDomainValidationCaaRecordCreated(domain) @l &
+      // a secure DNSSEC chain for this domain exists where none of the entities on the chain revealed their DNSSEC key
+      SecureChainExtended(domain) @m
+     ==>
+      (
+         Ex owner #x. ZoneOwnedBy(domain, owner) @x & (
+            // then it is the legitimate zone owner, or
+            owner = tlsAuthenticator |
+            // its TLS key was revealed
+            (Ex #y. TlsKeyRevealed(owner) @y)
+         )
+      )
+   "
+
+tactic: CustomHeuristicOnlyLegitimateKeyHolderCanIssueCertForPublicKey
+presort: c
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(\s*\S*\s*\)"
+prio:
+   regex "(?s)^!Adversary\(.*\)"
+prio:
+   regex "(?s)^CertIssued\(.*\)"
+prio:
+   regex "(?s)^!InsecureCa.*"
+prio:
+   regex "(?s)^TlsKeyRegistered\(.*\)"
+prio:
+   regex "(?s)sign\(<'csr'\s*,.*>.*\)"
+prio:
+   regex "(?s)^!KU\(\s*~ltk.*\)"
+
+lemma OnlyLegitimateKeyHolderCanIssueCertForPublicKey [heuristic={CustomHeuristicOnlyLegitimateKeyHolderCanIssueCertForPublicKey}]:
+   "
+   All caIdentifier domain publicKey tlsKeyOwner #i #j #k.
+      // if a certificate with a specific TLS public key is issued by a secure CA
+      CertIssued(caIdentifier, domain, publicKey) @i &
+      TlsKeyRegistered(tlsKeyOwner, publicKey) @j &
+      SecureCaCreated(caIdentifier) @k
+     ==>
+      (
+         // [benign case] the zone belongs to the legitmate TLS private key holder, or
+         (Ex #x. ZoneOwnedBy(domain, tlsKeyOwner) @x) |
+         // [misbehavior] the TLS public key is owned by the adversary (who might reveal it to anyone), or
+         (Ex #x. AdversaryCreated(tlsKeyOwner) @x) |
+         // [adversary] the domain owner revealed its TLS private key
+         (Ex #x. TlsKeyRevealed(tlsKeyOwner) @x)
+      )
+   "
+
+#ifdef onlysecuritylemmas
+
+#else
+
+// secure CA: availability guarantees
+
+tactic: LimitedTopologyHeuristicStartAtRoot
+presort: s
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(.*\)"
+prio:
+   regex "(?s)^!Adversary\(.*\)"
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*tld\s*,.*\)"
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*sld\s*,.*\)"
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*(domainZone|parent)\s*,.*\)"
+prio:
+   regex "(?s)^(!ApexDomain|IsApexDomain)\(\s*('root')\s*,.*\)"
+prio:
+   regex "(?s)^(!ApexDomain|IsApexDomain)\(\s*(tld)\s*,.*\)"
+prio:
+   regex "(?s)^(!ApexDomain|IsApexDomain)\(\s*(sld)\s*,.*\)"
+prio:
+   regex "(?s)^(!ApexDomain|IsApexDomain)\(\s*(parent|domainZone)\s*,.*\)"
+prio:
+   regex "(?s)^(!ZoneOwner|ZoneOwnedBy)\(\s*('root')\s*,.*\)"
+prio:
+   regex "(?s)^(!ZoneOwner|ZoneOwnedBy)\(\s*(tld)\s*,.*\)"
+prio:
+   regex "(?s)^(!ZoneOwner|ZoneOwnedBy)\(\s*(sld)\s*,.*\)"
+prio:
+   regex "(?s)^(!ZoneOwner|ZoneOwnedBy)\(\s*(parent|domainZone)\s*,.*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*('root')\s*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(tld)\s*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(sld)\s*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(parent|domainZone)\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*(sld|tld|parent|'root'|domainZone)\s*,.*\)"
+prio:
+   regex "(?s)^!KU\(\s*~ltk.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*'caa'.*>\s*,.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*'.*'.*>\s*,.*\)"
+deprio:
+   regex "(?s)^!KU\(\s*~accountUri.*\)"
+deprio:
+   regex "(?s)delegationZone"
+
+tactic: LimitedTopologyHeuristic
+presort: s
+// immediate contradiction
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*'root'\s*,.*\)"
+prio:
+   regex "(?s)^!DnssecRoot\(.*\)"
+prio:
+   regex "(?s)^!Adversary\(.*\)"
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*sld\s*,.*\)"
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*tld\s*,.*\)"
+prio:
+   regex "(?s)^(!Parent|ChildDomainCreated)\(\s*(domainZone|parent)\s*,.*\)"
+prio:
+   regex "(?s)^(!ApexDomain|IsApexDomain)\(\s*(sld|tld|parent|'root'|domainZone)\s*,.*\)"
+prio:
+   regex "(?s)^(!ZoneOwner|ZoneOwnedBy)\(\s*(sld|tld|parent|'root'|domainZone)\s*,.*\)"
+prio:
+   regex "(?s)^(!DnssecSecureChainToRoot|SecureChainExtended)\(\s*(sld|tld|parent|'root'|domainZone)\s*\)"
+prio:
+   regex "(?s)^(!ValidDnssecKeyForDomain|!ValidDnssecKeyDelegationSignerOrRoot|!ValidDnssecKeyLabel|IsValidDnssecKeyForDomain|IsValidDsOrRootDnssecKeyForDomain|IsValidLabelDnssecKeyForDomain|DnssecKeyValidatedUsingDelegationSignerOrRoot|DnssecKeyValidatedUsingChildDomain|!DnssecPublicKey)\(\s*(sld|tld|parent|'root'|domainZone)\s*,.*\)"
+prio:
+   regex "(?s)^!KU\(\s*~ltk.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*'caa'.*>\s*,.*\)"
+prio:
+   regex "(?s)sign\(\s*<\s*'.*'.*>\s*,.*\)"
+deprio:
+   regex "(?s)^!KU\(\s*~accountUri.*\)"
+deprio:
+   regex "(?s)delegationZone"
+
+lemma CanAuthenticateSecureDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier #i #j #k #l #m #n #o #p #q #r #s.
+      // Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      SignedCaaIssueRecordWithAccountUriCreated(sld, caIdentifier) @p &
+      // legitimate owner can authenticate
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @q &
+      SecureParticipatingCaCreated(caIdentifier) @r &
+      BenignDomainOwnerCreated(sldOwner) @s &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '1')
+   "
+
+lemma CanAuthenticateNoDnssecDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier #i #j #k #l #m #n #o #p #q #r.
+      // No DNSSEC SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      not(Ex #x. DnssecOptInSelected(sld) @x) &
+      // legitimate owner can authenticate
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @p &
+      SecureParticipatingCaCreated(caIdentifier) @q &
+      BenignDomainOwnerCreated(sldOwner) @r &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '0')
+   "
+
+lemma CanAuthenticateNoCaaDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier #i #j #k #l #m #n #o #p #q #r #s.
+      // No CAA SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      NsecPopNoCaaRecordCreated(sld) @p &
+      // legitimate owner can authenticate
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @q &
+      SecureParticipatingCaCreated(caIdentifier) @r &
+      BenignDomainOwnerCreated(sldOwner) @s &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '0' &
+         caaTag = 'empty' &
+         signedCaa = 'empty')
+   "
+
+lemma CanAuthenticateAdversaryDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier #i #j #k #l #m #n #o #p #q #r #s #t.
+      // Adversary Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      DnssecOptInSelected(sld) @p &
+      // adversary can authenticate owned domain
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @q &
+      SecureParticipatingCaCreated(caIdentifier) @r &
+      SignedCaaIssueRecordWithAccountUriCreated(sld, caIdentifier) @s &
+      AdversaryCreated(sldOwner) @t &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '1')
+   "
+
+lemma LegitimateUriAcceptedForVictimNoDnssecDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier u #i #j #k #l #m #n #o #p #q #r #s.
+      // No DNSSEC SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      not(Ex #x. DnssecOptInSelected(sld) @x) &
+      // legitimate account URI accepted
+      AccountUriAccepted(caIdentifier, sld, u) @p &
+      SecureParticipatingCaCreated(caIdentifier) @q &
+      AccountUriCreated(sldOwner, u) @r &
+      BenignDomainOwnerCreated(sldOwner) @s &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '0' &
+         caaTag = 'empty' &
+         signedCaa = 'empty')
+   "
+
+lemma AdversaryUriAcceptedForVictimNoDnssecDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier u adversary #i #j #k #l #m #n #o #p #q #r #s.
+      // No DNSSEC SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      not(Ex #x. DnssecOptInSelected(sld) @x) &
+      // legitimate account URI accepted
+      AccountUriAccepted(caIdentifier, sld, u) @p &
+      SecureParticipatingCaCreated(caIdentifier) @q &
+      AccountUriCreated(adversary, u) @r &
+      AdversaryCreated(adversary) @s &
+      not(Ex #x. ZoneOwnedBy(sld, adversary) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '0' &
+         caaTag = 'empty' &
+         signedCaa = 'empty')
+   "
+
+lemma LegitimateUriAcceptedForVictimNoCaaDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier u #i #j #k #l #m #n #o #p #q #r #s #t.
+      // No CAA SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      NsecPopNoCaaRecordCreated(sld) @p &
+      // legitimate account URI accepted
+      AccountUriAccepted(caIdentifier, sld, u) @q &
+      SecureParticipatingCaCreated(caIdentifier) @r &
+      AccountUriCreated(sldOwner, u) @s &
+      BenignDomainOwnerCreated(sldOwner) @t &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '0' &
+         caaTag = 'empty' &
+         signedCaa = 'empty')
+   "
+
+lemma AdversaryUriAcceptedForVictimNoCaaDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier u adversary #i #j #k #l #m #n #o #p #q #r #s #t.
+      // No CAA SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      NsecPopNoCaaRecordCreated(sld) @p &
+      // adversary account URI accepted
+      AccountUriAccepted(caIdentifier, sld, u) @q &
+      SecureParticipatingCaCreated(caIdentifier) @r &
+      AccountUriCreated(adversary, u) @s &
+      AdversaryCreated(adversary) @t &
+      not(Ex #x. ZoneOwnedBy(sld, adversary) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '0' &
+         caaTag = 'empty' &
+         signedCaa = 'empty')
+   "
+
+// secure CA: attacks
+
+lemma AdversaryCanAuthenticateNoDnssecDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier adversary #i #j #k #l #m #n #o #p #q #r #s.
+      // No DNSSEC SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      not(Ex #x. DnssecOptInSelected(sld) @x) &
+      // adversary can authenticate without revealing TLS key
+      CanSignTlsTranscript(sld, adversary, caIdentifier) @p &
+      SecureParticipatingCaCreated(caIdentifier) @q &
+      AdversaryCreated(adversary) @r &
+      BenignDomainOwnerCreated(sldOwner) @s &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '0')
+   "
+
+lemma AdversaryCanAuthenticateNoCaaDomainSld [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex adversary sld sldOwner tld root caIdentifier #i #j #k #l #m #n #o #p #q #r #s #t.
+      // No CAA SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      NsecPopNoCaaRecordCreated(sld) @p &
+      // adversary can authenticate without revealing TLS key
+      CanSignTlsTranscript(sld, adversary, caIdentifier) @q &
+      SecureParticipatingCaCreated(caIdentifier) @r &
+      AdversaryCreated(adversary) @s &
+      BenignDomainOwnerCreated(sldOwner) @t &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '0' &
+         caaTag = 'empty' &
+         signedCaa = 'empty')
+   "
+
+// Non-participating secure CA
+
+lemma NonParticipatingCaDomainOwnerCanAuthenticateIfHsvCriticalBitIsNotSet [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier accountUri #i #j #k #l #m #n #o #p #q #r #s #t.
+      // Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      SignedNonCriticalCaaHsvRecordWithDnssecRecordChangeCreated(sld) @p &
+      not(Ex #x. SignedCaaHsvRecordWithDnssecRecordChangeCreated(sld) @x) &
+      not(Ex #x. SignedCaaIssueRecordWithAccountUriCreated(sld, caIdentifier) @x) &
+      ValidationMethodAccepted(caIdentifier, sld, accountUri, <'0', '0', '0', '0', '1', '0'>) @q &
+      // legitimate owner can authenticate
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @r &
+      SecureNonParticipatingCaCreated(caIdentifier) @s &
+      BenignDomainOwnerCreated(sldOwner) @t &
+      not(Ex adversary #x. AdversaryCreated(adversary) @x) &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureNonParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'hsv' &
+         signedCaa = '1')
+   "
+
+lemma FakeCertificateWithoutCriticalFlag [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root adversary caIdentifier #i #j #k #l #m #n #o #p #q #r #s #t.
+      // Secure TLD Setup + SLD Opt-in with DNSSEC key reveal
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      BenignDomainOwnerCreated(sldOwner) @p &
+      SignedNonCriticalCaaHsvRecordWithDnssecRecordChangeCreated(sld) @q &
+      not(Ex #x. SignedCaaHsvRecordWithDnssecRecordChangeCreated(sld) @x) &
+      not(Ex #x. SignedCaaIssueRecordWithAccountUriCreated(sld, caIdentifier) @x) &
+      // adversary can sign TLS transcript for SLD without TLS key reveal
+      CanSignTlsTranscript(sld, adversary, caIdentifier) @r &
+      AdversaryCreated(adversary) @s &
+      SecureNonParticipatingCaCreated(caIdentifier) @t &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureNonParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'hsv' &
+         signedCaa = '1')
+   "
+
+
+// insecure CA (no DNSSEC)
+
+lemma InsecureCaNoDnssecAdversaryCaaAcceptedForVictimDomain [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root adversary caIdentifier u #i #j #k #l #m #n #o #p #q #r #s #t.
+      // Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      SignedCaaIssueRecordWithAccountUriCreated(sld, caIdentifier) @p &
+      // insecure CA accepts adversary's accountUri
+      AccountUriAccepted(caIdentifier, sld, u) @q &
+      InsecureCaNoDnssecCreated(caIdentifier) @r &
+      AccountUriCreated(adversary, u) @s &
+      AdversaryCreated(adversary) @t &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. InsecureCaNoDnssecCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '0')
+   "
+
+// key compromises
+
+lemma AdversaryCaaAcceptedForVictimDomainWithKeyReveal [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root adversary caIdentifier u #i #j #k #l #m #n #o #p #q #r #s #t #u #v #w.
+      // Secure TLD Setup + SLD Opt-in with DNSSEC key reveal
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      BenignDomainOwnerCreated(sldOwner) @p &
+      DnssecOptInSelected(sld) @q &
+      DnssecKeyRevealed(sld, sldOwner) @r &
+      SignedCaaIssueRecordWithAccountUriCreated(sld, caIdentifier) @s &
+      // adversary's accountUri accepted
+      AccountUriAccepted(caIdentifier, sld, u) @t &
+      SecureParticipatingCaCreated(caIdentifier) @u &
+      AccountUriCreated(adversary, u) @v &
+      AdversaryCreated(adversary) @w &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '1')
+   "
+
+lemma AdversaryCanAuthenticateIfDnssecKeyIsRevealed [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root adversary caIdentifier #i #j #k #l #m #n #o #p #q #r #s #t #u #v.
+      // Secure TLD Setup + SLD Opt-in with DNSSEC key reveal
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      BenignDomainOwnerCreated(sldOwner) @p &
+      DnssecOptInSelected(sld) @q &
+      DnssecKeyRevealed(sld, sldOwner) @r &
+      SignedCaaIssueRecordWithAccountUriCreated(sld, caIdentifier) @s &
+      // adversary can sign TLS transcript for SLD without TLS key reveal
+      CanSignTlsTranscript(sld, adversary, caIdentifier) @t &
+      AdversaryCreated(adversary) @u &
+      SecureParticipatingCaCreated(caIdentifier) @v &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '1')
+   "
+
+// sanity checks for DNSSEC record change (legitimate entities can request certificates from secure CA)
+
+lemma CanAuthenticateSecureDomainSldWithDnssecRecordChange [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier accountUri #i #j #k #l #m #n #o #p #q #r #s #t.
+      // Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      SignedCaaHsvRecordWithDnssecRecordChangeCreated(sld) @p &
+      ValidationMethodAccepted(caIdentifier, sld, accountUri, <'1', '0', '0', '0', '0', '0'>) @q &
+      not(Ex u #x. ValidationMethodAccepted(caIdentifier, sld, u, <'0', '0', '0', '0', '1', '0'>) @x) &
+      not(Ex u #x. ValidationMethodAccepted(caIdentifier, sld, u, <'0', '0', '1', '0', '0', '0'>) @x) &
+      // legitimate owner can authenticate
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @r &
+      SecureParticipatingCaCreated(caIdentifier) @s &
+      BenignDomainOwnerCreated(sldOwner) @t &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'hsv' &
+         signedCaa = '1')
+   "
+
+lemma AdversaryCanAuthenticateSecureDomainSldWithDnssecRecordChange [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier accountUri #i #j #k #l #m #n #o #p #q #r #s #t #u.
+      // Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      DnssecOptInSelected(sld) @p &
+      SignedCaaHsvRecordWithDnssecRecordChangeCreated(sld) @q &
+      ValidationMethodAccepted(caIdentifier, sld, accountUri, <'1', '0', '0', '0', '0', '0'>) @r &
+      not(Ex u #x. ValidationMethodAccepted(caIdentifier, sld, u, <'0', '0', '0', '0', '1', '0'>) @x) &
+      not(Ex u #x. ValidationMethodAccepted(caIdentifier, sld, u, <'0', '0', '1', '0', '0', '0'>) @x) &
+      // legitimate owner can authenticate
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @s &
+      SecureParticipatingCaCreated(caIdentifier) @t &
+      AdversaryCreated(sldOwner) @u &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'hsv' &
+         signedCaa = '1')
+   "
+
+// sanity checks for known account specifier (legitimate entities can request certificates from secure CA)
+
+lemma CanAuthenticateSecureDomainSldWithKnownAccountSpecifier [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier accountUri #i #j #k #l #m #n #o #p #q #r #s #t.
+      // Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      SignedCaaHsvRecordWithKnownAccountSpecifierCreated(sld) @p &
+      ValidationMethodAccepted(caIdentifier, sld, accountUri, <'0', '0', '1', '0', '0', '0'>) @q &
+      not(Ex u #x. ValidationMethodAccepted(caIdentifier, sld, u, <'0', '0', '0', '0', '1', '0'>) @x) &
+      not(Ex u #x. ValidationMethodAccepted(caIdentifier, sld, u, <'1', '0', '0', '0', '0', '0'>) @x) &
+      // legitimate owner can authenticate
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @r &
+      SecureParticipatingCaCreated(caIdentifier) @s &
+      BenignDomainOwnerCreated(sldOwner) @t &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'hsv' &
+         signedCaa = '1')
+   "
+
+lemma AdversaryCanAuthenticateSecureDomainSldWithKnownAccountSpecifier [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier accountUri #i #j #k #l #m #n #o #p #q #r #s #t #u.
+      // Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      DnssecOptInSelected(sld) @p &
+      SignedCaaHsvRecordWithKnownAccountSpecifierCreated(sld) @q &
+      ValidationMethodAccepted(caIdentifier, sld, accountUri, <'0', '0', '1', '0', '0', '0'>) @r &
+      not(Ex u #x. ValidationMethodAccepted(caIdentifier, sld, u, <'0', '0', '0', '0', '1', '0'>) @x) &
+      not(Ex u #x. ValidationMethodAccepted(caIdentifier, sld, u, <'1', '0', '0', '0', '0', '0'>) @x) &
+      // legitimate owner can authenticate
+      CanSignTlsTranscript(sld, sldOwner, caIdentifier) @s &
+      SecureParticipatingCaCreated(caIdentifier) @t &
+      AdversaryCreated(sldOwner) @u &
+      not(Ex #x. TlsKeyRevealed(sldOwner) @x) &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'hsv' &
+         signedCaa = '1')
+   "
+
+// sanity checks (legitimate entities can request certificates from secure CA)
+
+lemma LegitimateCaaAcceptedForVictimDomain [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier u #i #j #k #l #m #n #o #p #q #r #s #t.
+      // Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(sld) @o &
+      SignedCaaIssueRecordWithAccountUriCreated(sld, caIdentifier) @p &
+      // legitimate accountUri accepted
+      AccountUriAccepted(caIdentifier, sld, u) @q &
+      SecureParticipatingCaCreated(caIdentifier) @r &
+      AccountUriCreated(sldOwner, u) @s &
+      BenignDomainOwnerCreated(sldOwner) @t &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '1')
+   "
+
+lemma AdversaryCaaAcceptedForAdversaryDomain [heuristic={LimitedTopologyHeuristic}]:
+   exists-trace
+   "
+   Ex sld sldOwner tld root caIdentifier u #i #j #k #l #m #n #o #p #q #r #s #t.
+      // Adversary Secure SLD Setup
+      DnssecRootCreated(root) @i &
+      ChildDomainCreated(tld, root) @j &
+      ChildDomainCreated(sld, tld) @k &
+      IsApexDomain(tld, tld) @l &
+      IsApexDomain(sld, sld) @m &
+      ZoneOwnedBy(sld, sldOwner) @n &
+      SecureChainExtended(tld) @o &
+      DnssecOptInSelected(sld) @p &
+      // adversary's CAA record accepted for own domain
+      AccountUriAccepted(caIdentifier, sld, u) @q &
+      SecureParticipatingCaCreated(caIdentifier) @r &
+      AccountUriCreated(sldOwner, u) @s &
+      AdversaryCreated(sldOwner) @t &
+      (All validatingCa uri caaRecord caaTag signedCaa #x. CaaValidationOutcome(validatingCa, sld, uri, caaRecord, caaTag, signedCaa) @x
+         ==>
+         (Ex #y. SecureParticipatingCaCreated(validatingCa) @y) &
+         caaRecord = '1' &
+         caaTag = 'issue' &
+         signedCaa = '1')
+   "
+
+#endif
+
+end
