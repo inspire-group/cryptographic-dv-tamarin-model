@@ -154,5 +154,5 @@ There are no limitations with respect to the Tamarin model made available in thi
 
 ## Notes on Reusability
 
-The Tamarin model could be extended with additional prootocol details, such as precise interaction during creation of CA accounts and the communication of domain validation parameters, such as DNS nonces.
+The Tamarin model could be extended with additional protocol details, such as precise interaction during creation of CA accounts and the communication of domain validation parameters, such as DNS nonces.
 Furthermore, it could be extended to not only consider DNSSEC, but also the secure retrieval of DNS records through secure channels to authoritative nameservers (see Section 4.3, paragraph "Secure Channels for authenticated DNS lookup" in the paper).
