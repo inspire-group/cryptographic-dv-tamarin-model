@@ -1,18 +1,36 @@
 # Setup
 
+## Local Installation
+
 Install the Tamarin prover by following the [installation instructions](https://tamarin-prover.com/manual/master/book/002_installation.html).
+
+Then run the tamarin prover with the command: `tamarin-prover`
+
+## Docker
+
+Install docker and build the container: `docker build -t tamarin .`
+
+Then run the tamarin prover with the command: `docker run -t --net=host -v .:/workspace tamarin [Tamarin command line args]`
+
+`--net=host` allows the use of the Tamarin web interface.
+
+`-v .:/workspace` allows the container to use the current folder and execute the contained Tamarin model.
 
 # Running the Prover Interactively
 Run the tamarin prover with the following command: `tamarin-prover interactive --derivcheck-timeout=0 model.spthy --quit-on-warning`
 
-`--derivcheck-timeout=0` is necessary to prevent tamarin from aborting the model early due to the long loading time.
+`--derivcheck-timeout=0` is necessary to prevent Tamarin from aborting the model early due to the long loading time.
 
-`--quit-on-warning` ensures that modeling error will not only raise an alarm but also stop the tamarin prover.
+`--quit-on-warning` ensures that modeling error will not only raise an alarm but also stop the Tamarin prover.
 
-In the Tamarin web interface, use the shortcut "a" to prove a single selected lemma and the shortcut "s" to prove all lemmas in the model.
+In the Tamarin web interface (available on http://localhost:3001), use the shortcut "a" to prove a single selected lemma and the shortcut "s" to prove all lemmas in the model.
+
+If docker is used, the default execution starts the interactive prover: `docker run -t --net=host -v .:/workspace tamarin`
 
 # Running the Prover Automatically
-Run the tamarin prover with the following command: `tamarin-prover --derivcheck-timeout=0 model.spthy --quit-on-warning --prove=[lemma-to-prove]`
+Run the tamarin prover with the following command: `tamarin-prover --derivcheck-timeout=0 --quit-on-warning --prove=[lemma-to-prove] model.spthy`
+
+If docker is used, use the following command: `docker run -t --net=host -v .:/workspace tamarin --derivcheck-timeout=0 --quit-on-warning --prove=[lemma-to-prove] model.spthy`
 
 If no lemma is provided (`--prove`), all lemmas in the theory are proven.
 

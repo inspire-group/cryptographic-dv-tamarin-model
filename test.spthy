@@ -1,0 +1,27 @@
+theory TestModel
+begin
+
+// a simple model that can be proven almost instantaneously, used to test the Tamarin setup
+
+rule DummyRule:
+   [
+      Fr(~x)
+   ]
+ --[
+      DummyRuleExecuted(~x)
+   ]->
+   [
+   ]
+
+lemma DummyExistenceLemma:
+   exists-trace
+   "
+   Ex x #i. DummyRuleExecuted(x) @i
+   "
+
+lemma DummyForAllLemma:
+   "
+   All x #i. DummyRuleExecuted(x) @i ==> not(Ex #j. !KU(x) @j)
+   "
+
+end
