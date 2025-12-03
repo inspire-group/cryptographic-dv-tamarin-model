@@ -58,11 +58,13 @@ Lemmas can be proven either (1) automatically with `--prove` or (2) interactivel
 
 ```bash
 # automatic proof
-docker run -t --net=host -v .:/workspace tamarin --prove --quit-on-warning test.spthy
+docker run -t --net=host -v .:/workspace tamarin --prove --quit-on-warning --derivcheck-timeout=0 test.spthy
 
 # interactive proof: select "TestModel" and then click the key "s" to prove all lemmas
-docker run -t --net=host -v .:/workspace tamarin interactive --quit-on-warning .
+docker run -t --net=host -v .:/workspace tamarin interactive --quit-on-warning --derivcheck-timeout=0 .
 ```
+
+Note that `--quit-on-warning` ensures that if a Tamarin error is encountered, the prover aborts, and `--derivcheck-timeout=0` ensures that pre-proof Tamarin check does not time out.
 
 The automatic proof should contain the following two lines at the end of the proof output:
 
@@ -109,10 +111,8 @@ The first experiment takes around 218 minutes to complete and proves all securit
 It is run as follows:
 
 ```bash
-docker run -t --net=host -v .:/workspace tamarin --quit-on-warning --derivcheck-timeout=0 --prove model.spthy
+docker run -t --net=host -v .:/workspace tamarin --prove --quit-on-warning --derivcheck-timeout=0 model.spthy
 ```
-
-Note that `--derivcheck-timeout=0` ensures that pre-proof Tamarin check does not time out.
 
 The output should end with a list of all proven lemmas and each lemma must end with "verified (X steps)" showing that the Tamarin prover succeeded in verifying this lemma.
 For example:
@@ -132,7 +132,7 @@ Note that there is no need to run the executability and attack lemmas (result 3)
 It is run as follows:
 
 ```bash
-docker run -t --net=host -v .:/workspace tamarin --quit-on-warning --derivcheck-timeout=0 -Dnodebugrestrictions -Donlysecuritylemmas --prove model.spthy
+docker run -t --net=host -v .:/workspace tamarin --prove --quit-on-warning --derivcheck-timeout=0 -Dnodebugrestrictions -Donlysecuritylemmas model.spthy
 ```
 
 Analogous to experiment 1, the output should end with a list of all proven lemmas.
