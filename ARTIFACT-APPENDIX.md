@@ -86,9 +86,9 @@ Additionally, the model shows that the protocol is executable and that attacks a
 
 The security property "secure issuance" claims that if a CA supports cryptographic DV, they will not issue a certificate for a Dolev-Yao adversary.
 We prove this property with the following three lemmas showing that the CA only accepts certificate requests from the account created by the rightful domain owner, if ...
-- ... the domain owner creates a CAA security tag requiring secure lookup of a DNS nonce provided by the CA (SecureRecordChangeIssuance)
-- ... the domain owner creates a CAA security tag containing their account URI (KnownAccountSpecifierIssuance)
-- ... the domain owner creates a CAA issue tag containing their account URI (CaaIssueAccountUriIssuance)
+- ... the domain owner creates a CAA security tag requiring secure lookup of a DNS nonce provided by the CA (`SecureRecordChangeIssuance`)
+- ... the domain owner creates a CAA security tag containing their account URI (`KnownAccountSpecifierIssuance`)
+- ... the domain owner creates a CAA issue tag containing their account URI (`CaaIssueAccountUriIssuance`)
 
 #### Main Result 2: Downgrade Prevention
 
@@ -122,6 +122,10 @@ For example:
   HasApexDomain (all-traces): verified (35 steps)
   ...
 ```
+
+Note that by passing a specific lemma to tamarin (e.g., `--prove=SecureRecordChangeIssuance`), we can ignore all other lemmas and only prove this specific lemma, significantly reducing the proof time.
+However, it is important to note that the correctness of this proof depends on correctness of all prior lemmas marked with `[reuse]`.
+Hence, to ensure the correctness of this specific lemma, we must first prove all prior reuse lemmas in their respective order.
 
 #### Experiment 2: Prove security lemmas without visualization restriction
 
