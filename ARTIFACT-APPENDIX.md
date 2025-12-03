@@ -58,10 +58,10 @@ Lemmas can be proven either (1) automatically with `--prove` or (2) interactivel
 
 ```bash
 # automatic proof
-docker run -t --net=host -v .:/workspace tamarin --quit-on-warning --prove test.spthy
+docker run -t --net=host -v .:/workspace tamarin --prove --quit-on-warning test.spthy
 
 # interactive proof: select "TestModel" and then click the key "s" to prove all lemmas
-docker run -t --net=host -v .:/workspace tamarin --quit-on-warning interactive .
+docker run -t --net=host -v .:/workspace tamarin interactive --quit-on-warning .
 ```
 
 The automatic proof should contain the following two lines at the end of the proof output:
