@@ -151,6 +151,8 @@ For example:
 ## Limitations
 
 There are no limitations with respect to the Tamarin model made available in this artifact, i.e., the complete model is made available.
+The issuance logs used for the analysis in Section 4.5 cannot be included in the artifact, as the anonymous CA that provided them has not authorized their public distribution.  
+The empirical analysis results in Section 6.2 are not reproducible via the artifact alone, as they require access to privileged network infrastructure. Specifically, reproducing these experiments requires a /23 (at minimum) IPv4 prefix, an upstream BGP provider capable of propagating ethical hijack announcements, and control over specific victim domain resources (a domain name to serve as the 'victim', as well as cloud-hosted authoritative DNS and web servers)."   
 
 ## Notes on Reusability
 
