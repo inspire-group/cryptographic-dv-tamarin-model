@@ -53,7 +53,7 @@ docker build -t tamarin .
 
 ### Testing the Environment
 
-Launch the Docker container, attach the current working directory (i.e., run from the root of the cloned git repository) as a volume, set the context to be that volume, and prove Tamarin lemmas of a simple test model (`test.sphty`).
+Launch the Docker container, attach the current working directory (i.e., run from the root of the cloned git repository) as a volume, set the context to be that volume, and prove Tamarin lemmas of a simple test model (`test.spthy`).
 Lemmas can be proven either (1) automatically with `--prove` or (2) interactively via the Tamarin web interface at https://localhost:3001 with `interactive`.
 
 ```bash
